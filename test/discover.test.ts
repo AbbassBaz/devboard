@@ -157,4 +157,13 @@ describe("applyCwds", () => {
     expect(cc.cwd).toBeUndefined();
     expect(cc.name).toBe("ControlCenter");
   });
+
+  test("system services keep their executable name even when a cwd is known, and cwd / never yields a blank name", () => {
+    const services = groupServices(parseListeners(listenersText), parseProcesses(psText), 99999);
+    const cwds = new Map([[683, "/"], [835, "/opt/homebrew/var/db/redis"], [64671, "/"]]);
+    const out = applyCwds(services, cwds, new Map());
+    expect(out.find((s) => s.rootPid === 683)!.name).toBe("ControlCenter");
+    expect(out.find((s) => s.rootPid === 835)!.name).toBe("redis-server");
+    expect(out.find((s) => s.rootPid === 64671)!.name).toBe("node"); // dev, but cwd / has no folder name
+  });
 });

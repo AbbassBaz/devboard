@@ -63,7 +63,7 @@ exited, the root is the bun process itself.
 | ports | all listener ports under the root |
 | cwd | working directory of the root, from `lsof -a -d cwd -p <pids> -Fpn` |
 | command | args of the root |
-| name | `name` from `<cwd>/package.json` if present, else basename of cwd |
+| name | `name` from `<cwd>/package.json` if present; else for `dev` the basename of cwd (falling back to the executable when cwd is `/`); for `system` always the executable name |
 | kind | `dev` if the root executable is in the wrapper set or is a known runtime (`python`, `python3`, `uvicorn`, `ruby`, `java`, `go`, `cargo`), else `system` |
 | uptime | etime of the root |
 | cpu, memMb | summed over pids |

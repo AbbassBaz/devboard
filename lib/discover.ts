@@ -145,8 +145,9 @@ export function applyCwds(
 ): RunningService[] {
   return services.map((s) => {
     const cwd = cwds.get(s.rootPid);
-    const folder = cwd ? cwd.slice(cwd.lastIndexOf("/") + 1) : undefined;
-    return { ...s, cwd, name: names.get(s.rootPid) ?? folder ?? s.name };
+    const folder = cwd ? cwd.slice(cwd.lastIndexOf("/") + 1) || undefined : undefined;
+    const name = names.get(s.rootPid) ?? (s.kind === "dev" ? folder : undefined) ?? s.name;
+    return { ...s, cwd, name };
   });
 }
 
