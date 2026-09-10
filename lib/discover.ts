@@ -149,3 +149,46 @@ export function applyCwds(
     return { ...s, cwd, name: names.get(s.rootPid) ?? folder ?? s.name };
   });
 }
+
+async function run(cmd: string[]): Promise<string> {
+  const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
+  const text = await new Response(proc.stdout).text();
+  await proc.exited; // lsof exits 1 when it finds nothing; the output is still valid
+  return text;
+}
+
+export const scanListeners = (): Promise<Listener[]> =>
+  run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]).then(parseListeners);
+
+export const scanProcesses = (): Promise<Process[]> =>
+  run(["ps", "-axo", "pid=,ppid=,pcpu=,rss=,etime=,args="]).then(parseProcesses);
+
+export const scanCwds = (pids: number[]): Promise<Map<number, string>> =>
+  pids.length === 0
+    ? Promise.resolve(new Map())
+    : run(["lsof", "-a", "-d", "cwd", "-p", pids.join(","), "-Fpn"]).then(parseCwds);
+
+export async function readPackageName(cwd: string): Promise<string | undefined> {
+  try {
+    const pkg = await Bun.file(`${cwd}/package.json`).json();
+    return typeof pkg?.name === "string" && pkg.name ? pkg.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function discover(selfPid = process.pid): Promise<RunningService[]> {
+  const [listeners, processes] = await Promise.all([scanListeners(), scanProcesses()]);
+  const services = groupServices(listeners, processes, selfPid);
+  const cwds = await scanCwds(services.map((s) => s.rootPid));
+  const names = new Map<number, string>();
+  await Promise.all(
+    services.map(async (s) => {
+      const cwd = cwds.get(s.rootPid);
+      if (!cwd) return;
+      const name = await readPackageName(cwd);
+      if (name) names.set(s.rootPid, name);
+    }),
+  );
+  return applyCwds(services, cwds, names);
+}
