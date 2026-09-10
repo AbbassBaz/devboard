@@ -39,7 +39,10 @@ describe("GET /", () => {
     const res = await call("GET", "/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("devboard");
+    const html = await res.text();
+    expect(html).toContain("<title>devboard</title>");
+    expect(html).toContain('id="dev"');
+    expect(html).toContain("/api/services");
   });
 });
 

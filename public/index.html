@@ -1,3 +1,184 @@
 <!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>devboard</title>
-<p>devboard placeholder</p>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f6f8; --fg: #1a1a1f; --muted: #6d6d75; --card: #ffffff; --line: #e2e2e7; --ok: #1f9d63; --bad: #d64545; --accent: #3b6cf6; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #121216; --fg: #ececf1; --muted: #9b9ba5; --card: #1b1b21; --line: #2a2a32; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif; }
+  header.top { display: flex; align-items: baseline; gap: 12px; padding: 20px 24px 8px; }
+  h1 { margin: 0; font-size: 18px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { padding: 0 24px 48px; max-width: 1280px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
+  h2.toggle { cursor: pointer; user-select: none; }
+  .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--ok); vertical-align: middle; }
+  .dot.stopped { background: var(--muted); }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .cmd { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  a { color: var(--accent); text-decoration: none; }
+  a + a::before { content: " · "; color: var(--muted); }
+  button { font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; margin-right: 4px; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
+  button:disabled { opacity: .45; cursor: default; }
+  .empty { color: var(--muted); padding: 14px; }
+  #logs { position: fixed; inset: 0 0 0 auto; width: min(760px, 92vw); background: var(--card); border-left: 1px solid var(--line); display: none; flex-direction: column; box-shadow: -8px 0 24px rgba(0,0,0,.18); }
+  #logs.open { display: flex; }
+  #logs .bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  #logs pre { flex: 1; margin: 0; padding: 12px 16px; overflow: auto; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 8px 14px; border-radius: 8px; display: none; max-width: 80vw; }
+</style>
+</head>
+<body>
+<header class="top"><h1>devboard</h1><span class="sub" id="stamp">loading…</span></header>
+<main>
+  <h2>Dev servers</h2>
+  <div id="dev"></div>
+  <h2 class="toggle" id="sysToggle">System ▸</h2>
+  <div id="sys" hidden></div>
+</main>
+<aside id="logs">
+  <div class="bar"><strong id="logTitle"></strong><span><span class="sub" id="logMeta"></span> <button id="logClose">Close</button></span></div>
+  <pre id="logBody"></pre>
+</aside>
+<div id="toast"></div>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const home = (p) => (p ? p.replace(/^\/Users\/[^/]+/, "~") : "");
+let openLog = null;
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { "content-type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => (t.style.display = "none"), 4000);
+}
+
+function row(s) {
+  const running = s.status === "running";
+  const dev = s.kind === "dev";
+  const ports = s.ports.map((p) => `<a href="http://localhost:${p}" target="_blank" rel="noopener">${p}</a>`).join("");
+  const canRestart = Boolean(s.cwd && s.command);
+  const actions = [
+    s.hasLog ? `<button data-act="logs">Logs</button>` : "",
+    running && dev ? `<button data-act="restart" ${canRestart ? "" : 'disabled title="working directory unknown"'}>Restart</button>` : "",
+    !running ? `<button data-act="start">Start</button>` : "",
+    running ? `<button data-act="kill" class="danger">Kill</button>` : "",
+    dev && running && !s.pinned ? `<button data-act="pin" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Pin</button>` : "",
+    dev && s.pinned ? `<button data-act="unpin">Unpin</button>` : "",
+  ].join("");
+  return `<tr data-id="${esc(s.id)}" data-root="${s.rootPid ?? ""}" data-kind="${s.kind}" data-name="${esc(s.name)}">
+    <td><span class="dot ${running ? "" : "stopped"}"></span>${esc(s.name)}${s.pinned ? " 📌" : ""}</td>
+    <td>${ports}</td>
+    <td class="num mono">${s.rootPid ?? ""}</td>
+    <td class="mono">${esc(s.uptime ?? "")}</td>
+    <td class="num">${s.cpu != null ? s.cpu.toFixed(1) : ""}</td>
+    <td class="num">${s.memMb ?? ""}</td>
+    <td class="mono" title="${esc(s.cwd)}">${esc(home(s.cwd))}</td>
+    <td class="mono cmd" title="${esc(s.command)}">${esc(s.command ?? "")}</td>
+    <td>${actions}</td>
+  </tr>`;
+}
+
+function table(list) {
+  if (!list.length) return `<div class="wrap"><div class="empty">Nothing here.</div></div>`;
+  return `<div class="wrap"><table>
+    <thead><tr><th>Service</th><th>Ports</th><th class="num">PID</th><th>Uptime</th><th class="num">CPU %</th><th class="num">MB</th><th>Folder</th><th>Command</th><th></th></tr></thead>
+    <tbody>${list.map(row).join("")}</tbody></table></div>`;
+}
+
+async function refresh() {
+  try {
+    const { services, generatedAt } = await api("GET", "/api/services");
+    $("#dev").innerHTML = table(services.filter((s) => s.kind === "dev"));
+    $("#sys").innerHTML = table(services.filter((s) => s.kind === "system"));
+    const running = services.filter((s) => s.status === "running").length;
+    $("#stamp").textContent = `${running} running · updated ${new Date(generatedAt).toLocaleTimeString()}`;
+  } catch (e) {
+    $("#stamp").textContent = "devboard server unreachable";
+  }
+}
+
+async function refreshLog() {
+  if (!openLog) return;
+  try {
+    const { lines, size } = await api("GET", `/api/logs/${encodeURIComponent(openLog)}?lines=200`);
+    const pre = $("#logBody");
+    const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+    pre.textContent = lines.join("\n");
+    $("#logMeta").textContent = `${(size / 1024).toFixed(0)} KB · last 200 lines`;
+    if (stick) pre.scrollTop = pre.scrollHeight;
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-act]");
+  if (!btn) return;
+  const tr = btn.closest("tr");
+  const act = btn.dataset.act;
+  const id = tr.dataset.id;
+  const rootPid = Number(tr.dataset.root) || undefined;
+  btn.disabled = true;
+  try {
+    if (act === "kill") {
+      if (tr.dataset.kind === "system" && !confirm(`Kill ${tr.dataset.name}? It is a system process and may be restarted by macOS.`)) return;
+      await api("POST", "/api/kill", { rootPid });
+    } else if (act === "restart") {
+      await api("POST", "/api/restart", rootPid ? { rootPid } : { id });
+    } else if (act === "start") {
+      await api("POST", "/api/start", { id });
+    } else if (act === "pin") {
+      await api("POST", "/api/pin", { rootPid });
+    } else if (act === "unpin") {
+      await api("DELETE", `/api/pin/${encodeURIComponent(id)}`);
+    } else if (act === "logs") {
+      openLog = id;
+      $("#logTitle").textContent = tr.dataset.name;
+      $("#logs").classList.add("open");
+      await refreshLog();
+    }
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    refresh();
+  }
+});
+
+$("#logClose").onclick = () => { openLog = null; $("#logs").classList.remove("open"); };
+$("#sysToggle").onclick = () => {
+  const sys = $("#sys");
+  sys.hidden = !sys.hidden;
+  $("#sysToggle").textContent = sys.hidden ? "System ▸" : "System ▾";
+};
+
+refresh();
+setInterval(refresh, 3000);
+setInterval(refreshLog, 2000);
+</script>
+</body>
+</html>
