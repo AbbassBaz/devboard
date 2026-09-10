@@ -29,6 +29,16 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   };
 
   return async function handle(req: Request): Promise<Response> {
+    const res = await route(req);
+    const isMutation = req.method !== "GET";
+    if (isMutation || res.status >= 400) {
+      const path = new URL(req.url).pathname;
+      if (path !== "/favicon.ico") console.log(`${new Date().toISOString()} ${req.method} ${path} -> ${res.status}${res.status >= 400 ? " " + (await res.clone().text()).slice(0, 200) : ""}`);
+    }
+    return res;
+  };
+
+  async function route(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const { pathname } = url;
     const method = req.method;
@@ -112,7 +122,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err), 500);
     }
-  };
+  }
 }
 
 if (import.meta.main) {

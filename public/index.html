@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>devboard</title>
+<link rel="icon" href="data:,">
 <style>
-  :root { color-scheme: light dark; --bg: #f6f6f8; --fg: #1a1a1f; --muted: #6d6d75; --card: #ffffff; --line: #e2e2e7; --ok: #1f9d63; --bad: #d64545; --accent: #3b6cf6; }
+  :root { --panel: min(760px, 92vw); color-scheme: light dark; --bg: #f6f6f8; --fg: #1a1a1f; --muted: #6d6d75; --card: #ffffff; --line: #e2e2e7; --ok: #1f9d63; --bad: #d64545; --accent: #3b6cf6; }
   @media (prefers-color-scheme: dark) { :root { --bg: #121216; --fg: #ececf1; --muted: #9b9ba5; --card: #1b1b21; --line: #2a2a32; } }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif; }
@@ -13,6 +14,7 @@
   h1 { margin: 0; font-size: 18px; }
   .sub { color: var(--muted); font-size: 13px; }
   main { padding: 0 24px 48px; max-width: 1280px; }
+  body.logs-open main { padding-right: calc(var(--panel) + 24px); max-width: none; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
   h2.toggle { cursor: pointer; user-select: none; }
   .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
@@ -32,7 +34,7 @@
   button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
   button:disabled { opacity: .45; cursor: default; }
   .empty { color: var(--muted); padding: 14px; }
-  #logs { position: fixed; inset: 0 0 0 auto; width: min(760px, 92vw); background: var(--card); border-left: 1px solid var(--line); display: none; flex-direction: column; box-shadow: -8px 0 24px rgba(0,0,0,.18); }
+  #logs { position: fixed; inset: 0 0 0 auto; width: var(--panel); background: var(--card); border-left: 1px solid var(--line); display: none; flex-direction: column; box-shadow: -8px 0 24px rgba(0,0,0,.18); }
   #logs.open { display: flex; }
   #logs .bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
   #logs pre { flex: 1; margin: 0; padding: 12px 16px; overflow: auto; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
@@ -43,6 +45,7 @@
 <header class="top"><h1>devboard</h1><span class="sub" id="stamp">loading…</span></header>
 <main>
   <h2>Dev servers</h2>
+  <p class="sub" style="margin:-4px 0 8px">Logs exist only for services started from here. Restart a terminal-started service to take it over, or Start a pinned one.</p>
   <div id="dev"></div>
   <h2 class="toggle" id="sysToggle">System ▸</h2>
   <div id="sys" hidden></div>
@@ -160,16 +163,18 @@ document.addEventListener("click", async (ev) => {
       openLog = id;
       $("#logTitle").textContent = tr.dataset.name;
       $("#logs").classList.add("open");
+      document.body.classList.add("logs-open");
       await refreshLog();
     }
   } catch (e) {
     toast(e.message);
   } finally {
     refresh();
+    if (act === "start" || act === "restart") [800, 1800, 3000].forEach((ms) => setTimeout(refresh, ms)); // the new process needs a moment to bind its port
   }
 });
 
-$("#logClose").onclick = () => { openLog = null; $("#logs").classList.remove("open"); };
+$("#logClose").onclick = () => { openLog = null; $("#logs").classList.remove("open"); document.body.classList.remove("logs-open"); };
 $("#sysToggle").onclick = () => {
   const sys = $("#sys");
   sys.hidden = !sys.hidden;
