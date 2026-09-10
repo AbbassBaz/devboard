@@ -1,0 +1,126 @@
+import { Control, killTree } from "./lib/control";
+import { discover as realDiscover } from "./lib/discover";
+import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
+import { Registry } from "./lib/registry";
+import type { RunningService, StartSpec } from "./lib/types";
+
+export type Deps = {
+  discover: () => Promise<RunningService[]>;
+  registry: Registry;
+  control: Control;
+};
+
+const json = (data: unknown, status = 200) => Response.json(data, { status });
+const fail = (message: string, status = 400) => json({ error: message }, status);
+const page = Bun.file(new URL("./public/index.html", import.meta.url));
+
+export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
+  const { registry, control } = deps;
+
+  const findRunning = async (rootPid: number) => (await deps.discover()).find((s) => s.rootPid === rootPid);
+
+  const readBody = async (req: Request): Promise<Record<string, unknown>> => {
+    try {
+      const body = await req.json();
+      return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  return async function handle(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    const { pathname } = url;
+    const method = req.method;
+    try {
+      if (method === "GET" && pathname === "/") {
+        return new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+
+      if (method === "GET" && pathname === "/api/services") {
+        const [running, pinned] = await Promise.all([deps.discover(), registry.load()]);
+        const services = mergeServices(running, pinned, (id) => control.hasLog(id));
+        return json({ services, generatedAt: new Date().toISOString() });
+      }
+
+      if (method === "POST" && pathname === "/api/kill") {
+        const { rootPid } = await readBody(req);
+        if (typeof rootPid !== "number") return fail("rootPid required");
+        const svc = await findRunning(rootPid);
+        if (!svc) return fail("no running service with that rootPid", 404);
+        return json(await killTree(svc.pids));
+      }
+
+      if (method === "POST" && pathname === "/api/start") {
+        const { id } = await readBody(req);
+        if (typeof id !== "string") return fail("id required");
+        const pinned = (await registry.load()).find((p) => p.id === id);
+        if (!pinned) return fail("no pinned service with that id", 404);
+        const alreadyRunning = (await deps.discover()).some((s) => matchPinned(s, [pinned]));
+        if (alreadyRunning) return fail("already running", 409);
+        return json({ pid: await control.start(pinned) });
+      }
+
+      if (method === "POST" && pathname === "/api/restart") {
+        const body = await readBody(req);
+        const pinnedList = await registry.load();
+        let spec: StartSpec;
+        let pids: number[] = [];
+        if (typeof body.rootPid === "number") {
+          const svc = await findRunning(body.rootPid);
+          if (!svc) return fail("no running service with that rootPid", 404);
+          if (!svc.cwd) return fail("working directory unknown, cannot restart");
+          spec = matchPinned(svc, pinnedList) ?? { id: logIdFor(svc), cwd: svc.cwd, command: svc.command };
+          pids = svc.pids;
+        } else if (typeof body.id === "string") {
+          const pinned = pinnedList.find((p) => p.id === body.id);
+          if (!pinned) return fail("no pinned service with that id", 404);
+          const svc = (await deps.discover()).find((s) => matchPinned(s, [pinned]));
+          spec = pinned;
+          pids = svc?.pids ?? [];
+        } else {
+          return fail("rootPid or id required");
+        }
+        const result = pids.length ? await killTree(pids) : { killed: [], forced: [] };
+        return json({ ...result, pid: await control.start(spec) });
+      }
+
+      if (method === "POST" && pathname === "/api/pin") {
+        const { rootPid, name } = await readBody(req);
+        if (typeof rootPid !== "number") return fail("rootPid required");
+        const svc = await findRunning(rootPid);
+        if (!svc) return fail("no running service with that rootPid", 404);
+        return json({ pinned: await registry.pin(svc, typeof name === "string" && name ? name : undefined) });
+      }
+
+      const unpin = /^\/api\/pin\/([^/]+)$/.exec(pathname);
+      if (method === "DELETE" && unpin) {
+        const removed = await registry.unpin(decodeURIComponent(unpin[1]));
+        return removed ? json({ ok: true }) : fail("not pinned", 404);
+      }
+
+      const logs = /^\/api\/logs\/([^/]+)$/.exec(pathname);
+      if (method === "GET" && logs) {
+        const id = decodeURIComponent(logs[1]);
+        if (!control.hasLog(id)) return fail("no log for that id", 404);
+        const requested = Number(url.searchParams.get("lines") ?? 200);
+        const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 5000) : 200;
+        return json(await control.tailLog(id, lines));
+      }
+
+      return fail("not found", 404);
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err), 500);
+    }
+  };
+}
+
+if (import.meta.main) {
+  const port = Number(process.env.PORT ?? 4242);
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port,
+    fetch: createHandler({ discover: () => realDiscover(), registry: new Registry(), control: new Control() }),
+  });
+  console.log(`devboard → http://127.0.0.1:${server.port}`);
+}
