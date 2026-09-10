@@ -88,13 +88,29 @@ export function indexProcesses(procs: Process[]) {
   return { byPid, byPpid };
 }
 
-export function findRoot(pid: number, byPid: Map<number, Process>, stopAt: number): number {
+/** pid plus every ancestor of it that appears in the table, nearest first. */
+export function selfAndAncestors(pid: number, byPid: Map<number, Process>): Set<number> {
+  const out = new Set<number>([pid]);
+  let current = byPid.get(pid);
+  while (current && current.ppid > 1 && !out.has(current.ppid)) {
+    out.add(current.ppid);
+    current = byPid.get(current.ppid);
+  }
+  return out;
+}
+
+/**
+ * Climb from a listener to the top of its dev-wrapper chain. `stop` is devboard's own
+ * pid and ancestors: services devboard starts are its children, and anything started from
+ * the same shell wrapper as devboard is its sibling, so the walk must never enter that chain.
+ */
+export function findRoot(pid: number, byPid: Map<number, Process>, stop: ReadonlySet<number>): number {
   let current = pid;
   for (;;) {
     const proc = byPid.get(current);
     if (!proc) return current;
     const parent = byPid.get(proc.ppid);
-    if (!parent || parent.pid <= 1 || parent.pid === stopAt || !isWrapper(parent)) return current;
+    if (!parent || parent.pid <= 1 || stop.has(parent.pid) || !isWrapper(parent)) return current;
     current = parent.pid;
   }
 }
@@ -109,9 +125,10 @@ export function treePids(rootPid: number, byPpid: Map<number, Process[]>): numbe
 
 export function groupServices(listeners: Listener[], processes: Process[], selfPid: number): RunningService[] {
   const { byPid, byPpid } = indexProcesses(processes);
+  const stop = selfAndAncestors(selfPid, byPid);
   const portsByRoot = new Map<number, Set<number>>();
   for (const l of listeners) {
-    const root = findRoot(l.pid, byPid, selfPid);
+    const root = findRoot(l.pid, byPid, stop);
     const ports = portsByRoot.get(root) ?? new Set<number>();
     ports.add(l.port);
     portsByRoot.set(root, ports);

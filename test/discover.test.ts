@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyCwds, exeName, findRoot, groupServices, indexProcesses, isWrapper, parseCwds, parseListeners, parseProcesses, treePids } from "../lib/discover";
+import { applyCwds, exeName, findRoot, groupServices, indexProcesses, isWrapper, parseCwds, parseListeners, parseProcesses, selfAndAncestors, treePids } from "../lib/discover";
 
 const listenersText = await Bun.file(new URL("./fixtures/lsof-listeners.txt", import.meta.url)).text();
 const psText = await Bun.file(new URL("./fixtures/ps.txt", import.meta.url)).text();
@@ -53,7 +53,12 @@ describe("parseCwds", () => {
 describe("tree walk", () => {
   const procs = parseProcesses(psText);
   const { byPid, byPpid } = indexProcesses(procs);
-  const SELF = 99999;
+  const SELF = selfAndAncestors(99999, byPid);
+
+  test("selfAndAncestors walks up to launchd without including it", () => {
+    expect([...SELF]).toEqual([99999, 99998, 51664]); // 51000 (iTerm) is not in the table, so the walk ends
+    expect([...selfAndAncestors(41727, byPid)]).toEqual([41727]);
+  });
 
   test("exeName takes the basename of the first token", () => {
     expect(exeName("node /x/y/pnpm dev")).toBe("node");
@@ -89,8 +94,22 @@ describe("tree walk", () => {
 
   test("findRoot never climbs into devboard itself, so devboard-started services keep their own root", () => {
     expect(findRoot(77778, byPid, SELF)).toBe(77777);
-    // without stopAt the walk would continue into 99999 (bun) and 99998 (bun run dev)
-    expect(findRoot(77778, byPid, -1)).toBe(99998);
+    // without the stop set the walk would continue into 99999 (bun) and 99998 (bun run dev)
+    expect(findRoot(77778, byPid, new Set())).toBe(99998);
+  });
+
+  test("findRoot stops below devboard's ancestors too, so a sibling started from the same sh -c wrapper stays separate", () => {
+    const wrapped = parseProcesses(
+      psText +
+        "\n88880 51664   0.0   1000       00:09 /bin/zsh -c bun run dev & sh -c 'bun -e serve; exit 0'" +
+        "\n88881 88880   0.0   1000       00:09 /bin/sh -c bun -e serve; exit 0" +
+        "\n88882 88881   0.0  20000       00:09 bun -e serve" +
+        "\n88883 88880   0.0  50000       00:09 bun --watch server.ts",
+    );
+    const idx = indexProcesses(wrapped);
+    const stop = selfAndAncestors(88883, idx.byPid);
+    expect(stop.has(88880)).toBe(true);
+    expect(findRoot(88882, idx.byPid, stop)).toBe(88881);
   });
 
   test("treePids returns the root and all descendants", () => {

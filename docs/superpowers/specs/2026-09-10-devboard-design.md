@@ -46,10 +46,11 @@ user's shell: `node`, `bun`, `deno`, `npm`, `npx`, `pnpm`, `yarn`, `next`,
 Everything else (login shells, launchd, iTerm, Electron apps) stops the walk.
 
 **Tree root.** Starting from a listener's pid, walk to the parent while the parent is
-in the wrapper set and is not devboard's own pid. The last accepted pid is the root.
-Stopping at devboard matters because services devboard starts have devboard as their
-parent until devboard exits; without the rule they would be folded into devboard's
-own tree and hidden by the self-exclusion below. For a Next.js dev server
+in the wrapper set and is not devboard's own pid or one of devboard's ancestors. The last
+accepted pid is the root. Stopping there matters twice over: services devboard starts have
+devboard as their parent until devboard exits, and services started from the same shell
+wrapper as devboard are its siblings. Without the rule either would be folded into
+devboard's own tree and hidden by the self-exclusion below. For a Next.js dev server
 started with `pnpm dev`, the root is the `pnpm dev` process, and the tree is
 `pnpm dev` → `next dev` → `next-server`. For a bun watch process whose shell has
 exited, the root is the bun process itself.
@@ -106,7 +107,8 @@ Pure functions, each testable with fixture text:
 - `parseProcesses(psText): Process[]`
 - `parseCwds(lsofText): Map<number, string>`
 - `isWrapper(proc): boolean`
-- `findRoot(pid, byPid, stopAt): number` (never climbs into `stopAt`)
+- `selfAndAncestors(pid, byPid): Set<number>`
+- `findRoot(pid, byPid, stop): number` (never climbs into the `stop` set)
 - `descendants(rootPid, byPpid): number[]`
 - `groupServices(listeners, processes, cwds, selfPid): RunningService[]`
 
