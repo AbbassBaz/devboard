@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { parseListeners } from "../lib/discover";
+import { parseCwds, parseListeners, parseProcesses } from "../lib/discover";
 
 const listenersText = await Bun.file(new URL("./fixtures/lsof-listeners.txt", import.meta.url)).text();
+const psText = await Bun.file(new URL("./fixtures/ps.txt", import.meta.url)).text();
+const cwdText = await Bun.file(new URL("./fixtures/lsof-cwd.txt", import.meta.url)).text();
 
 describe("parseListeners", () => {
   test("one listener per pid+port, deduplicating IPv4/IPv6 and repeated fds", () => {
@@ -20,5 +22,30 @@ describe("parseListeners", () => {
 
   test("returns [] for empty output", () => {
     expect(parseListeners("")).toEqual([]);
+  });
+});
+
+describe("parseProcesses", () => {
+  test("parses every line with numeric fields and the full args", () => {
+    const procs = parseProcesses(psText);
+    expect(procs).toHaveLength(17);
+    const next = procs.find((p) => p.pid === 64734)!;
+    expect(next).toEqual({ pid: 64734, ppid: 64728, pcpu: 0, rss: 12288, etime: "23-01:48:34", args: "next-server (v16.3.1)" });
+    const redis = procs.find((p) => p.pid === 835)!;
+    expect(redis.pcpu).toBe(0.1);
+    expect(redis.args).toBe("/opt/homebrew/opt/redis/bin/redis-server 127.0.0.1:6379");
+  });
+
+  test("keeps short etime values", () => {
+    expect(parseProcesses(psText).find((p) => p.pid === 99999)!.etime).toBe("00:05");
+  });
+});
+
+describe("parseCwds", () => {
+  test("maps pid to working directory", () => {
+    const cwds = parseCwds(cwdText);
+    expect(cwds.size).toBe(3);
+    expect(cwds.get(64672)).toBe("/Users/abbassbaz/Desktop/Sadie/OnCoreDocs");
+    expect(cwds.get(835)).toBe("/opt/homebrew/var/db/redis");
   });
 });

@@ -1,0 +1,9 @@
+p835
+fcwd
+n/opt/homebrew/var/db/redis
+p41727
+fcwd
+n/Users/abbassbaz/Desktop/Sadie/CoreAgentsHub/apps/core-proxy
+p64672
+fcwd
+n/Users/abbassbaz/Desktop/Sadie/OnCoreDocs

@@ -1,0 +1,17 @@
+    1     0   0.3   9000 49-00:13:42 /sbin/launchd
+  652     1   0.0   6000 49-00:13:40 /usr/libexec/rapportd
+  683     1   0.5  45000 49-00:13:40 /System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter
+  835     1   0.1   1104 49-00:10:06 /opt/homebrew/opt/redis/bin/redis-server 127.0.0.1:6379
+41727     1   0.0  55296 01-21:35:46 bun run --preload ./src/instrumentation.ts --watch src/index.ts
+51664 51000   0.0   5000 23-01:50:00 -zsh
+64672 51664   0.0  60000 23-01:48:35 node /Users/abbassbaz/.local/state/fnm_multishells/51664_1787044842120/bin/pnpm dev
+64728 64672   0.0  80000 23-01:48:34 node /Users/abbassbaz/Desktop/Sadie/OnCoreDocs/node_modules/.pnpm/next@16.3.1/node_modules/next/dist/bin/next dev --port 3010
+64734 64728   0.0  12288 23-01:48:34 next-server (v16.3.1)
+64671     1   0.0   3072 23-01:48:35 node scripts/serve-out.mjs
+68729     1   0.0  40000 02-02:13:28 npm exec next dev --port 3001
+68755 68729   0.0  70000 02-02:13:28 node /Users/abbassbaz/Desktop/Sadie/CoreAgentsHub/apps/dashboard/node_modules/next/dist/bin/next dev --port 3001
+68761 68755   0.0  43008 02-02:13:28 next-server (v16.2.6)
+99998 51664   0.0  30000       00:05 bun run dev
+99999 99998   0.0  50000       00:05 bun --watch server.ts
+77777 99999   0.0   1000       00:03 /bin/sh -c bun run --watch src/index.ts
+77778 77777   0.0  26000       00:03 bun run --watch src/index.ts
