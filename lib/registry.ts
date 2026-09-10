@@ -34,20 +34,17 @@ export class Registry {
     await rename(tmp, this.path);
   }
 
-  async pin(running: RunningService, name?: string): Promise<Pinned> {
-    if (!running.cwd) throw new Error("cannot pin a service whose working directory is unknown");
-    const finalName = name ?? running.name;
-    const pinned: Pinned = {
-      id: pinnedId(finalName, running.ports[0]),
-      name: finalName,
-      cwd: running.cwd,
-      command: running.command,
-      port: running.ports[0],
-    };
+  async add(input: Omit<Pinned, "id">): Promise<Pinned> {
+    const pinned: Pinned = { id: pinnedId(input.name, input.port), ...input };
     const list = (await this.load()).filter((p) => p.id !== pinned.id);
     list.push(pinned);
     await this.save(list);
     return pinned;
+  }
+
+  async pin(running: RunningService, name?: string): Promise<Pinned> {
+    if (!running.cwd) throw new Error("cannot pin a service whose working directory is unknown");
+    return this.add({ name: name ?? running.name, cwd: running.cwd, command: running.command, port: running.ports[0] });
   }
 
   async unpin(id: string): Promise<boolean> {

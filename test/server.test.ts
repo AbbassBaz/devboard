@@ -60,6 +60,28 @@ describe("GET /api/services", () => {
   });
 });
 
+describe("POST /api/pinned (hand-entered server)", () => {
+  test("creates a stopped pinned service, expanding ~ in the folder", async () => {
+    running = [];
+    const res = await call("POST", "/api/pinned", { name: "Home Thing", cwd: "~", command: "true", port: 39992 });
+    expect(res.status).toBe(201);
+    const { pinned } = await res.json();
+    expect(pinned).toMatchObject({ id: "home-thing-39992", cwd: process.env.HOME, command: "true", port: 39992 });
+    const list = (await (await call("GET", "/api/services")).json()).services;
+    expect(list.find((s: Service) => s.id === "home-thing-39992")).toMatchObject({ status: "stopped", pinned: true });
+    await registry.unpin("home-thing-39992");
+  });
+
+  test("rejects missing fields, bad ports and folders that do not exist", async () => {
+    expect((await call("POST", "/api/pinned", { cwd: home, command: "true", port: 1 })).status).toBe(400);
+    expect((await call("POST", "/api/pinned", { name: "x", cwd: home, command: "true", port: "abc" })).status).toBe(400);
+    expect((await call("POST", "/api/pinned", { name: "x", cwd: home, command: "true", port: 70000 })).status).toBe(400);
+    const missing = await call("POST", "/api/pinned", { name: "x", cwd: join(home, "nope"), command: "true", port: 1 });
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).error).toContain("folder does not exist");
+  });
+});
+
 describe("POST /api/pin and DELETE /api/pin/:id", () => {
   test("pins a running service and unpins by id", async () => {
     running = [docs];

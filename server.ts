@@ -1,3 +1,5 @@
+import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { Control, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
@@ -13,6 +15,7 @@ export type Deps = {
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const fail = (message: string, status = 400) => json({ error: message }, status);
 const page = Bun.file(new URL("./public/index.html", import.meta.url));
+const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? homedir() + p.slice(1) : p);
 
 export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   const { registry, control } = deps;
@@ -93,6 +96,20 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         }
         const result = pids.length ? await killTree(pids) : { killed: [], forced: [] };
         return json({ ...result, pid: await control.start(spec) });
+      }
+
+      if (method === "POST" && pathname === "/api/pinned") {
+        const { name, cwd, command, port } = await readBody(req);
+        if (typeof name !== "string" || !name.trim()) return fail("name required");
+        if (typeof cwd !== "string" || !cwd.trim()) return fail("folder required");
+        if (typeof command !== "string" || !command.trim()) return fail("command required");
+        const portNum = Number(port);
+        if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) return fail("port must be a whole number between 1 and 65535");
+        const folder = expandHome(cwd.trim());
+        const info = await stat(folder).catch(() => undefined);
+        if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
+        const pinned = await registry.add({ name: name.trim(), cwd: folder, command: command.trim(), port: portNum });
+        return json({ pinned }, 201);
       }
 
       if (method === "POST" && pathname === "/api/pin") {

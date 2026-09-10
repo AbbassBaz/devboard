@@ -6,184 +6,293 @@
 <title>devboard</title>
 <link rel="icon" href="data:,">
 <style>
-  :root { --panel: min(760px, 92vw); color-scheme: light dark; --bg: #f6f6f8; --fg: #1a1a1f; --muted: #6d6d75; --card: #ffffff; --line: #e2e2e7; --ok: #1f9d63; --bad: #d64545; --accent: #3b6cf6; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #121216; --fg: #ececf1; --muted: #9b9ba5; --card: #1b1b21; --line: #2a2a32; } }
+  :root {
+    color-scheme: dark;
+    --bg: #0a0d0c; --card: #0f1412; --edge: #1b2520; --edge-hi: #2a382f;
+    --fg: #e3eae6; --muted: #7b8983; --dim: #4b5852;
+    --on: #62d69f; --on-deep: #0b3a26; --warn: #d9a441; --danger: #df5f5b;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "SF Pro Text", system-ui, sans-serif;
+    --pane: 38vh;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif; }
-  header.top { display: flex; align-items: baseline; gap: 12px; padding: 20px 24px 8px; }
-  h1 { margin: 0; font-size: 18px; }
-  .sub { color: var(--muted); font-size: 13px; }
-  main { padding: 0 24px 48px; max-width: 1280px; }
-  body.logs-open main { padding-right: calc(var(--panel) + 24px); max-width: none; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
-  h2.toggle { cursor: pointer; user-select: none; }
-  .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
-  th { font-weight: 600; color: var(--muted); font-size: 12px; }
-  tr:last-child td { border-bottom: 0; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--ok); vertical-align: middle; }
-  .dot.stopped { background: var(--muted); }
-  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); }
-  .cmd { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; }
-  a { color: var(--accent); text-decoration: none; }
-  a + a::before { content: " · "; color: var(--muted); }
-  button { font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; margin-right: 4px; }
-  button:hover:not(:disabled) { border-color: var(--accent); }
-  button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
-  button:disabled { opacity: .45; cursor: default; }
-  .empty { color: var(--muted); padding: 14px; }
-  #logs { position: fixed; inset: 0 0 0 auto; width: var(--panel); background: var(--card); border-left: 1px solid var(--line); display: none; flex-direction: column; box-shadow: -8px 0 24px rgba(0,0,0,.18); }
+  [hidden] { display: none !important; }
+  body { margin: 0; min-height: 100vh; color: var(--fg); font: 14px/1.45 var(--sans);
+    background: var(--bg) radial-gradient(900px 420px at 30% -10%, rgba(98, 214, 159, .10), transparent 70%) no-repeat; }
+  a { color: var(--on); text-decoration: none; } a:hover { text-decoration: underline; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--on); outline-offset: 2px; border-radius: 4px; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+
+  header.top { display: flex; align-items: center; gap: 20px; padding: 22px 28px 6px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark { width: 10px; height: 10px; border-radius: 50%; background: var(--on); box-shadow: 0 0 14px var(--on); }
+  h1 { margin: 0; font: 600 15px/1 var(--mono); letter-spacing: .12em; }
+  #stamp { color: var(--muted); margin-left: auto; }
+  .ghost { padding: 7px 12px; border: 1px solid var(--edge-hi); border-radius: 8px; color: var(--fg); font-size: 13px; }
+  .ghost:hover { border-color: var(--on); color: var(--on); }
+  .ghost.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+  main { padding: 10px 28px 48px; transition: padding-bottom .2s; }
+  body.logs-open main { padding-bottom: calc(var(--pane) + 32px); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+
+  .card { position: relative; background: var(--card); border: 1px solid var(--edge); border-radius: 12px; padding: 16px 16px 14px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  .card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent); }
+  .card .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .card .name { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+  .card .ports { display: flex; gap: 10px; margin-top: 3px; }
+  .card .facts { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); }
+  .card .facts span:first-child { color: var(--fg); }
+  .card.off .facts { color: var(--dim); }
+  .card .path, .card .cmd { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .card .cmd { color: var(--dim); }
+  .card .actions { display: flex; gap: 4px 14px; flex-wrap: wrap; margin-top: 4px; }
+  .card .actions button { color: var(--muted); font-size: 13px; padding: 2px 0; border-bottom: 1px solid transparent; }
+  .card .actions button:hover:not(:disabled) { color: var(--fg); border-bottom-color: var(--edge-hi); }
+  .card .actions button.danger:hover { color: var(--danger); }
+  .card .actions button:disabled { color: var(--dim); cursor: default; }
+  .card .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--edge); }
+  .card.on .bar { background: linear-gradient(90deg, var(--on) 0%, rgba(98,214,159,.15) 100%); }
+  .card.busy .bar { background: var(--warn); }
+
+  .switch { flex: none; position: relative; width: 46px; height: 26px; border-radius: 13px; background: #1c2622; border: 1px solid var(--edge-hi); transition: background .2s, box-shadow .2s; }
+  .switch .knob { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #9aa8a1; transition: transform .2s, background .2s; }
+  .card.on .switch { background: var(--on); border-color: transparent; box-shadow: 0 0 16px rgba(98,214,159,.45), inset 0 0 0 1px rgba(255,255,255,.15); }
+  .card.on .switch .knob { transform: translateX(20px); background: var(--on-deep); }
+  .card.busy .switch { background: #4a3a14; border-color: var(--warn); cursor: progress; }
+  .card.busy .switch .knob { background: var(--warn); animation: knob 1s ease-in-out infinite alternate; }
+  @keyframes knob { from { transform: translateX(0); } to { transform: translateX(20px); } }
+
+  .card.add { border-style: dashed; border-color: var(--edge-hi); gap: 10px; }
+  .card.add h2 { margin: 0 0 4px; font: 600 14px var(--sans); }
+  .field { display: grid; gap: 4px; }
+  .field label { color: var(--muted); font-size: 12px; }
+  .field input { font: 13px var(--mono); color: var(--fg); background: #0a0f0d; border: 1px solid var(--edge-hi); border-radius: 6px; padding: 7px 9px; }
+  .field input:focus { outline: none; border-color: var(--on); }
+  .row2 { display: grid; grid-template-columns: 1fr 110px; gap: 10px; }
+  .form-actions { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
+  .form-actions .primary { background: var(--on); color: var(--on-deep); border-radius: 8px; padding: 7px 14px; font-weight: 600; }
+  .form-actions .primary:hover { filter: brightness(1.08); }
+  .form-error { color: var(--danger); font-size: 13px; min-height: 1.2em; }
+
+  .empty { color: var(--muted); padding: 26px 0; grid-column: 1 / -1; }
+
+  details.sys { margin-top: 28px; }
+  details.sys summary { cursor: pointer; color: var(--muted); font-family: var(--mono); font-size: 12px; list-style: none; display: flex; align-items: center; gap: 8px; }
+  details.sys summary::before { content: "▸"; color: var(--dim); } details.sys[open] summary::before { content: "▾"; }
+  .sysrow { display: grid; grid-template-columns: 190px 170px 70px 1fr auto; gap: 14px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--edge); color: var(--muted); }
+  .sysrow .n { color: var(--fg); } .sysrow .c { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+  .sysrow button { color: var(--muted); font-size: 12px; } .sysrow button:hover { color: var(--danger); }
+
+  #logs { position: fixed; left: 0; right: 0; bottom: 0; height: var(--pane); background: #070a09; border-top: 1px solid var(--edge-hi); display: none; flex-direction: column; box-shadow: 0 -12px 40px rgba(0,0,0,.5); }
   #logs.open { display: flex; }
-  #logs .bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-  #logs pre { flex: 1; margin: 0; padding: 12px 16px; overflow: auto; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
-  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 8px 14px; border-radius: 8px; display: none; max-width: 80vw; }
+  #logs .bar { display: flex; align-items: center; gap: 14px; padding: 10px 20px; border-bottom: 1px solid var(--edge); }
+  #logs .bar strong { font: 600 13px var(--mono); }
+  #logs .bar .meta { color: var(--muted); margin-right: auto; }
+  #logs pre { flex: 1; margin: 0; padding: 12px 20px 20px; overflow: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; color: #c7d1cc; }
+  #logs .note { padding: 22px 20px; color: var(--muted); max-width: 60ch; line-height: 1.55; }
+  #logs .note strong { color: var(--fg); }
+  #logs .note .ghost { margin-top: 12px; display: inline-block; }
+
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--danger); color: #fff; padding: 9px 14px; border-radius: 8px; display: none; max-width: 80vw; z-index: 2; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  @media (max-width: 640px) { header.top { flex-wrap: wrap; } main { padding: 10px 16px 48px; } .sysrow { grid-template-columns: 1fr auto; } .sysrow .c, .sysrow .p { display: none; } }
 </style>
 </head>
 <body>
-<header class="top"><h1>devboard</h1><span class="sub" id="stamp">loading…</span></header>
+<header class="top">
+  <div class="brand"><span class="mark"></span><h1>devboard</h1></div>
+  <span class="mono" id="stamp">connecting…</span>
+  <button class="ghost" id="addBtn">+ Add server</button>
+</header>
 <main>
-  <h2>Dev servers</h2>
-  <p class="sub" style="margin:-4px 0 8px">Logs exist only for services started from here. Restart a terminal-started service to take it over, or Start a pinned one.</p>
-  <div id="dev"></div>
-  <h2 class="toggle" id="sysToggle">System ▸</h2>
-  <div id="sys" hidden></div>
+  <form class="card add" id="addForm" hidden autocomplete="off">
+    <h2>Add a server</h2>
+    <div class="field"><label for="f-name">Name</label><input id="f-name" name="name" placeholder="core-api" required></div>
+    <div class="field"><label for="f-cwd">Folder</label><input id="f-cwd" name="cwd" placeholder="~/Desktop/Sadie/CoreAgentsHub/apps/core-api" required></div>
+    <div class="row2">
+      <div class="field"><label for="f-cmd">Command</label><input id="f-cmd" name="command" placeholder="bun run --watch src/index.ts" required></div>
+      <div class="field"><label for="f-port">Port</label><input id="f-port" name="port" type="number" min="1" max="65535" placeholder="3003" required></div>
+    </div>
+    <div class="form-error" id="formError"></div>
+    <div class="form-actions"><button class="primary" type="submit">Add server</button><button class="ghost" type="button" id="addCancel">Cancel</button></div>
+  </form>
+  <section class="grid" id="dev"></section>
+  <details class="sys" id="sys">
+    <summary>System processes <span id="sysCount"></span></summary>
+    <div id="sysList"></div>
+  </details>
 </main>
-<aside id="logs">
-  <div class="bar"><strong id="logTitle"></strong><span><span class="sub" id="logMeta"></span> <button id="logClose">Close</button></span></div>
-  <pre id="logBody"></pre>
-</aside>
-<div id="toast"></div>
+<section id="logs" aria-live="polite">
+  <div class="bar"><strong id="logTitle"></strong><span class="meta mono" id="logMeta"></span><button class="ghost" id="logClose">Close</button></div>
+  <div id="logBody"></div>
+</section>
+<div id="toast" role="status"></div>
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const home = (p) => (p ? p.replace(/^\/Users\/[^/]+/, "~") : "");
+let latest = [];
+const busy = new Map(); // id -> { state: "starting" | "stopping", at }, until the next poll confirms the change or 15 s pass
+const setBusy = (id, state) => busy.set(id, { state, at: Date.now() });
 let openLog = null;
 
 async function api(method, path, body) {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { "content-type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const res = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
-
 function toast(msg) {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.style.display = "block";
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => (t.style.display = "none"), 4000);
+  const t = $("#toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.style.display = "none"), 4500);
 }
 
-function row(s) {
+function card(s) {
   const running = s.status === "running";
-  const dev = s.kind === "dev";
-  const ports = s.ports.map((p) => `<a href="http://localhost:${p}" target="_blank" rel="noopener">${p}</a>`).join("");
-  const canRestart = Boolean(s.cwd && s.command);
+  const b = busy.get(s.id)?.state;
+  const state = b ? "busy" : running ? "on" : "off";
+  const ports = s.ports.map((p) => `<a class="mono" href="http://localhost:${p}" target="_blank" rel="noopener">:${p}</a>`).join("");
+  const facts = running
+    ? `<span>pid ${s.rootPid}</span><span>up ${esc(s.uptime)}</span><span>${s.cpu != null ? s.cpu.toFixed(1) : "0.0"}% cpu</span><span>${s.memMb ?? 0} MB</span>`
+    : `<span>off</span><span>${s.pinned ? "saved" : ""}</span>`;
   const actions = [
-    s.hasLog ? `<button data-act="logs">Logs</button>` : "",
-    running && dev ? `<button data-act="restart" ${canRestart ? "" : 'disabled title="working directory unknown"'}>Restart</button>` : "",
-    !running ? `<button data-act="start">Start</button>` : "",
-    running ? `<button data-act="kill" class="danger">Kill</button>` : "",
-    dev && running && !s.pinned ? `<button data-act="pin" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Pin</button>` : "",
-    dev && s.pinned ? `<button data-act="unpin">Unpin</button>` : "",
+    `<button data-act="logs">Logs</button>`,
+    running ? `<button data-act="restart" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Restart</button>` : "",
+    running && !s.pinned ? `<button data-act="pin" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Pin</button>` : "",
+    s.pinned ? `<button data-act="remove" class="danger">Remove</button>` : "",
   ].join("");
-  return `<tr data-id="${esc(s.id)}" data-root="${s.rootPid ?? ""}" data-kind="${s.kind}" data-name="${esc(s.name)}">
-    <td><span class="dot ${running ? "" : "stopped"}"></span>${esc(s.name)}${s.pinned ? " 📌" : ""}</td>
-    <td>${ports}</td>
-    <td class="num mono">${s.rootPid ?? ""}</td>
-    <td class="mono">${esc(s.uptime ?? "")}</td>
-    <td class="num">${s.cpu != null ? s.cpu.toFixed(1) : ""}</td>
-    <td class="num">${s.memMb ?? ""}</td>
-    <td class="mono" title="${esc(s.cwd)}">${esc(home(s.cwd))}</td>
-    <td class="mono cmd" title="${esc(s.command)}">${esc(s.command ?? "")}</td>
-    <td>${actions}</td>
-  </tr>`;
+  const switchLabel = b === "starting" ? "Starting" : b === "stopping" ? "Stopping" : running ? `Turn ${s.name} off` : `Turn ${s.name} on`;
+  return `<article class="card ${state}" data-id="${esc(s.id)}" data-name="${esc(s.name)}">
+    <div class="head">
+      <div><div class="name">${esc(s.name)}${s.pinned ? ' <span class="mono" style="color:var(--dim)">pinned</span>' : ""}</div><div class="ports">${ports}</div></div>
+      <button class="switch" role="switch" aria-checked="${running}" aria-label="${esc(switchLabel)}" title="${esc(switchLabel)}" data-act="toggle" ${b ? "disabled" : ""}><span class="knob"></span></button>
+    </div>
+    <div class="facts mono">${facts}</div>
+    <div class="path mono" title="${esc(s.cwd)}">${esc(home(s.cwd))}</div>
+    <div class="cmd mono" title="${esc(s.command)}">${esc(s.command ?? "")}</div>
+    <div class="actions">${actions}</div>
+    <div class="bar"></div>
+  </article>`;
+}
+function sysRow(s) {
+  return `<div class="sysrow mono" data-id="${esc(s.id)}" data-name="${esc(s.name)}"><span class="n">${esc(s.name)}</span><span class="p">${s.ports.map((p) => ":" + p).join("  ")}</span><span>${s.rootPid}</span><span class="c" title="${esc(s.command)}">${esc(s.command)}</span><button data-act="kill-sys" data-root="${s.rootPid}">Kill</button></div>`;
 }
 
-function table(list) {
-  if (!list.length) return `<div class="wrap"><div class="empty">Nothing here.</div></div>`;
-  return `<div class="wrap"><table>
-    <thead><tr><th>Service</th><th>Ports</th><th class="num">PID</th><th>Uptime</th><th class="num">CPU %</th><th class="num">MB</th><th>Folder</th><th>Command</th><th></th></tr></thead>
-    <tbody>${list.map(row).join("")}</tbody></table></div>`;
+function render() {
+  const dev = latest.filter((s) => s.kind === "dev");
+  const sys = latest.filter((s) => s.kind === "system");
+  for (const [id, { state, at }] of busy) {
+    const s = dev.find((x) => x.id === id);
+    const settled = (state === "starting" && s?.status === "running") || (state === "stopping" && (!s || s.status === "stopped"));
+    if (settled || Date.now() - at > 15000) busy.delete(id);
+  }
+  dev.sort((a, b) => (a.status === b.status ? a.name.localeCompare(b.name) : a.status === "running" ? -1 : 1));
+  $("#dev").innerHTML = dev.length ? dev.map(card).join("") : `<p class="empty">Nothing running. Start a dev server from a terminal and it shows up here, or add one above and switch it on.</p>`;
+  $("#sysList").innerHTML = sys.map(sysRow).join("");
+  $("#sysCount").textContent = `(${sys.length})`;
+  const on = dev.filter((s) => s.status === "running").length;
+  $("#stamp").textContent = `${on} on   ${dev.length - on} off   ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+  renderLog();
 }
 
 async function refresh() {
   try {
-    const { services, generatedAt } = await api("GET", "/api/services");
-    $("#dev").innerHTML = table(services.filter((s) => s.kind === "dev"));
-    $("#sys").innerHTML = table(services.filter((s) => s.kind === "system"));
-    const running = services.filter((s) => s.status === "running").length;
-    $("#stamp").textContent = `${running} running · updated ${new Date(generatedAt).toLocaleTimeString()}`;
+    const { services } = await api("GET", "/api/services");
+    latest = services;
+    render();
   } catch (e) {
     $("#stamp").textContent = "devboard server unreachable";
   }
 }
+const refreshSoon = () => [700, 1600, 3000].forEach((ms) => setTimeout(refresh, ms));
 
-async function refreshLog() {
+async function renderLog() {
   if (!openLog) return;
-  try {
-    const { lines, size } = await api("GET", `/api/logs/${encodeURIComponent(openLog)}?lines=200`);
-    const pre = $("#logBody");
-    const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
-    pre.textContent = lines.join("\n");
-    $("#logMeta").textContent = `${(size / 1024).toFixed(0)} KB · last 200 lines`;
-    if (stick) pre.scrollTop = pre.scrollHeight;
-  } catch (e) {
-    toast(e.message);
+  const s = latest.find((x) => x.id === openLog);
+  const body = $("#logBody");
+  $("#logTitle").textContent = s ? s.name : openLog;
+  if (!s) { body.innerHTML = `<div class="note">This service is no longer on the board.</div>`; $("#logMeta").textContent = ""; return; }
+  if (!s.hasLog) {
+    $("#logMeta").textContent = "no output captured";
+    body.innerHTML = s.status === "running"
+      ? `<div class="note"><strong>${esc(s.name)}</strong> was started from a terminal, so its output is going there. devboard can only show output of services it starts itself.<br><button class="ghost" data-act="restart" data-id="${esc(s.id)}">Restart ${esc(s.name)} here</button> <span style="margin-left:10px">and the log appears within a few seconds.</span></div>`
+      : `<div class="note"><strong>${esc(s.name)}</strong> has never been started from devboard. Switch it on and its output lands here.</div>`;
+    return;
   }
+  try {
+    const { lines, size } = await api("GET", `/api/logs/${encodeURIComponent(s.id)}?lines=300`);
+    let pre = body.querySelector("pre");
+    if (!pre) { body.innerHTML = "<pre></pre>"; pre = body.firstChild; }
+    const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 12;
+    pre.textContent = lines.join("\n");
+    $("#logMeta").textContent = `${(size / 1024).toFixed(0)} KB  last ${lines.length} lines  ~/.devboard/logs/${s.id}.log`;
+    if (stick) pre.scrollTop = pre.scrollHeight;
+  } catch (e) { toast(e.message); }
 }
 
 document.addEventListener("click", async (ev) => {
   const btn = ev.target.closest("button[data-act]");
   if (!btn) return;
-  const tr = btn.closest("tr");
   const act = btn.dataset.act;
-  const id = tr.dataset.id;
-  const rootPid = Number(tr.dataset.root) || undefined;
+  const holder = btn.closest("[data-id]");
+  const id = btn.dataset.id || holder?.dataset.id;
+  const s = latest.find((x) => x.id === id);
   btn.disabled = true;
   try {
-    if (act === "kill") {
-      if (tr.dataset.kind === "system" && !confirm(`Kill ${tr.dataset.name}? It is a system process and may be restarted by macOS.`)) return;
-      await api("POST", "/api/kill", { rootPid });
-    } else if (act === "restart") {
-      await api("POST", "/api/restart", rootPid ? { rootPid } : { id });
-    } else if (act === "start") {
-      await api("POST", "/api/start", { id });
-    } else if (act === "pin") {
-      await api("POST", "/api/pin", { rootPid });
-    } else if (act === "unpin") {
+    if (act === "toggle" && s) {
+      if (s.status === "running") {
+        setBusy(id, "stopping");
+        if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid }); // keep the card so it can be switched back on
+        await api("POST", "/api/kill", { rootPid: s.rootPid });
+      } else {
+        setBusy(id, "starting");
+        await api("POST", "/api/start", { id });
+      }
+    } else if (act === "restart" && s) {
+      setBusy(id, "starting");
+      await api("POST", "/api/restart", s.rootPid ? { rootPid: s.rootPid } : { id });
+    } else if (act === "pin" && s) {
+      await api("POST", "/api/pin", { rootPid: s.rootPid });
+    } else if (act === "remove" && s) {
       await api("DELETE", `/api/pin/${encodeURIComponent(id)}`);
-    } else if (act === "logs") {
+    } else if (act === "logs" && s) {
       openLog = id;
-      $("#logTitle").textContent = tr.dataset.name;
       $("#logs").classList.add("open");
       document.body.classList.add("logs-open");
-      await refreshLog();
+    } else if (act === "kill-sys") {
+      const name = holder?.dataset.name || "this process";
+      if (confirm(`Kill ${name}? It is a system process and macOS may restart it.`)) await api("POST", "/api/kill", { rootPid: Number(btn.dataset.root) });
     }
   } catch (e) {
+    busy.delete(id);
     toast(e.message);
   } finally {
+    render();
     refresh();
-    if (act === "start" || act === "restart") [800, 1800, 3000].forEach((ms) => setTimeout(refresh, ms)); // the new process needs a moment to bind its port
+    if (act === "toggle" || act === "restart") refreshSoon();
   }
 });
 
 $("#logClose").onclick = () => { openLog = null; $("#logs").classList.remove("open"); document.body.classList.remove("logs-open"); };
-$("#sysToggle").onclick = () => {
-  const sys = $("#sys");
-  sys.hidden = !sys.hidden;
-  $("#sysToggle").textContent = sys.hidden ? "System ▸" : "System ▾";
+$("#addBtn").onclick = () => { const f = $("#addForm"); f.hidden = !f.hidden; if (!f.hidden) $("#f-name").focus(); };
+$("#addCancel").onclick = () => { $("#addForm").hidden = true; $("#formError").textContent = ""; };
+$("#addForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const data = Object.fromEntries(new FormData(f));
+  const body = { name: data.name, cwd: data.cwd, command: data.command, port: Number(data.port) };
+  try {
+    await api("POST", "/api/pinned", body);
+    f.reset(); f.hidden = true; $("#formError").textContent = "";
+    refresh();
+  } catch (e) { $("#formError").textContent = e.message; }
 };
 
 refresh();
 setInterval(refresh, 3000);
-setInterval(refreshLog, 2000);
+setInterval(renderLog, 2000);
 </script>
 </body>
 </html>

@@ -32,7 +32,20 @@ the same PATH (fnm's node, pnpm, bun).
 - **Start / Restart.** Runs the saved command in its folder via `/bin/sh -c`,
   detached in its own process group, output appended to
   `~/.devboard/logs/<id>.log`. Closing devboard does not stop what it started.
-- **Logs.** Last 200 lines of that file, refreshed every 2 seconds.
+- **Logs.** Last 300 lines of that file, refreshed every 2 seconds, in a pane at the
+  bottom of the page. A service that devboard did not start has no log yet; the pane
+  says so and offers to restart it under devboard.
+- **Add server.** The button in the header opens a form for name, folder, command and
+  port. The folder must exist. The new card starts switched off; switch it on to run it.
+
+## The page
+
+One card per dev server. The switch on the card is the state: green and on means
+running, grey and off means stopped. Switching off kills the process tree; if the card
+was not pinned yet it is pinned first so it stays on the board and can be switched back
+on. Switching on runs the saved command from devboard. Restart is kill then start.
+Remove drops a pinned card. System processes (Postgres, Redis, macOS services) sit in a
+collapsed list below the cards with only a Kill action.
 
 ## Limits
 

@@ -47,6 +47,15 @@ describe("Registry", () => {
     expect(await registry.load()).toHaveLength(2); // same id replaced, not duplicated
   });
 
+  test("add stores a hand-entered service and replaces one with the same id", async () => {
+    const added = await registry.add({ name: "Docs", cwd: "/tmp", command: "pnpm dev", port: 3010 });
+    expect(added).toEqual({ id: "docs-3010", name: "Docs", cwd: "/tmp", command: "pnpm dev", port: 3010 });
+    await registry.add({ name: "Docs", cwd: "/tmp", command: "pnpm dev --turbo", port: 3010 });
+    const list = await registry.load();
+    expect(list).toHaveLength(1);
+    expect(list[0].command).toBe("pnpm dev --turbo");
+  });
+
   test("pin rejects a service with no cwd", async () => {
     await expect(registry.pin({ ...running, cwd: undefined })).rejects.toThrow("working directory");
   });
