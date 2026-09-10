@@ -1,7 +1,7 @@
 # devboard design
 
 Date: 2026-09-10
-Status: approved 2026-09-10
+Status: implemented 2026-09-10 on branch feat/v1
 
 ## Purpose
 
