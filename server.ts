@@ -98,7 +98,8 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         return json({ ...result, pid: await control.start(spec) });
       }
 
-      if (method === "POST" && pathname === "/api/pinned") {
+      const editPinned = /^\/api\/pinned\/([^/]+)$/.exec(pathname);
+      if ((method === "POST" && pathname === "/api/pinned") || (method === "PUT" && editPinned)) {
         const { name, cwd, command, port } = await readBody(req);
         if (typeof name !== "string" || !name.trim()) return fail("name required");
         if (typeof cwd !== "string" || !cwd.trim()) return fail("folder required");
@@ -108,8 +109,12 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const folder = expandHome(cwd.trim());
         const info = await stat(folder).catch(() => undefined);
         if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
-        const pinned = await registry.add({ name: name.trim(), cwd: folder, command: command.trim(), port: portNum });
-        return json({ pinned }, 201);
+        const input = { name: name.trim(), cwd: folder, command: command.trim(), port: portNum };
+        if (editPinned) {
+          const pinned = await registry.replace(decodeURIComponent(editPinned[1]), input);
+          return pinned ? json({ pinned }) : fail("no pinned service with that id", 404);
+        }
+        return json({ pinned: await registry.add(input) }, 201);
       }
 
       if (method === "POST" && pathname === "/api/pin") {

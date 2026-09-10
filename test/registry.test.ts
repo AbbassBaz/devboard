@@ -56,6 +56,14 @@ describe("Registry", () => {
     expect(list[0].command).toBe("pnpm dev --turbo");
   });
 
+  test("replace edits in place, renames the id when name or port change, and reports unknown ids", async () => {
+    await registry.add({ name: "Docs", cwd: "/tmp", command: "pnpm dev", port: 3010 });
+    const edited = await registry.replace("docs-3010", { name: "OnCore Docs", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
+    expect(edited).toEqual({ id: "oncore-docs-3011", name: "OnCore Docs", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
+    expect((await registry.load()).map((p) => p.id)).toEqual(["oncore-docs-3011"]);
+    expect(await registry.replace("docs-3010", { name: "x", cwd: "/tmp", command: "true", port: 1 })).toBeUndefined();
+  });
+
   test("pin rejects a service with no cwd", async () => {
     await expect(registry.pin({ ...running, cwd: undefined })).rejects.toThrow("working directory");
   });

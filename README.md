@@ -37,6 +37,12 @@ the same PATH (fnm's node, pnpm, bun).
   says so and offers to restart it under devboard.
 - **Add server.** The button in the header opens a form for name, folder, command and
   port. The folder must exist. The new card starts switched off; switch it on to run it.
+- **Edit.** Pinned cards have an Edit action that opens the same form pre-filled. The
+  saved list is `~/.devboard/services.json`; it is read on every request, so editing the
+  file by hand works too, no restart needed.
+- **npm exec.** A server launched with `npx` shows up as `npm exec <cmd> <args>`. devboard
+  saves it as `npm exec -- <cmd> <args>`, because without the `--` npm eats flags meant
+  for the command (`--port 3001` turned into `next dev 3001`).
 
 ## The page
 

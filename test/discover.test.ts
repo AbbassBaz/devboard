@@ -76,6 +76,14 @@ describe("tree walk", () => {
     expect(commandOf("-zsh")).toBe("-zsh");
   });
 
+  test("commandOf inserts -- after npm exec so the command's own flags survive a re-run", () => {
+    expect(commandOf("npm exec next dev --port 3001")).toBe("npm exec -- next dev --port 3001");
+    expect(commandOf("/bin/sh -c npm exec next dev --port 3001")).toBe("npm exec -- next dev --port 3001");
+    expect(commandOf("npm exec -- next dev --port 3001")).toBe("npm exec -- next dev --port 3001");
+    expect(commandOf("npm exec")).toBe("npm exec");
+    expect(commandOf("npm run dev")).toBe("npm run dev");
+  });
+
   test("isWrapper accepts JS runtimes, package managers, and sh -c only", () => {
     const p = (args: string) => ({ pid: 1, ppid: 0, pcpu: 0, rss: 0, etime: "", args });
     expect(isWrapper(p("node /x/pnpm dev"))).toBe(true);
@@ -151,6 +159,7 @@ describe("groupServices", () => {
     expect(docs.pids.sort()).toEqual([64672, 64728, 64734]);
     expect(docs.ports).toEqual([3010]);
     expect(docs.command).toBe("node /Users/abbassbaz/.local/state/fnm_multishells/51664_1787044842120/bin/pnpm dev");
+    expect(services.find((s) => s.rootPid === 68729)!.command).toBe("npm exec -- next dev --port 3001");
     expect(docs.kind).toBe("dev");
     expect(docs.uptime).toBe("23-01:48:35");
     expect(docs.memMb).toBe(149); // (60000 + 80000 + 12288) / 1024 rounded

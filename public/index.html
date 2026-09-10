@@ -108,7 +108,7 @@
 </header>
 <main>
   <form class="card add" id="addForm" hidden autocomplete="off">
-    <h2>Add a server</h2>
+    <h2 id="formTitle">Add a server</h2>
     <div class="field"><label for="f-name">Name</label><input id="f-name" name="name" placeholder="core-api" required></div>
     <div class="field"><label for="f-cwd">Folder</label><input id="f-cwd" name="cwd" placeholder="~/Desktop/Sadie/CoreAgentsHub/apps/core-api" required></div>
     <div class="row2">
@@ -116,7 +116,7 @@
       <div class="field"><label for="f-port">Port</label><input id="f-port" name="port" type="number" min="1" max="65535" placeholder="3003" required></div>
     </div>
     <div class="form-error" id="formError"></div>
-    <div class="form-actions"><button class="primary" type="submit">Add server</button><button class="ghost" type="button" id="addCancel">Cancel</button></div>
+    <div class="form-actions"><button class="primary" type="submit" id="formSubmit">Add server</button><button class="ghost" type="button" id="addCancel">Cancel</button></div>
   </form>
   <section class="grid" id="dev"></section>
   <details class="sys" id="sys">
@@ -137,6 +137,21 @@ let latest = [];
 const busy = new Map(); // id -> { state: "starting" | "stopping", at }, until the next poll confirms the change or 15 s pass
 const setBusy = (id, state) => busy.set(id, { state, at: Date.now() });
 let openLog = null;
+let editingId = null; // pinned id being edited in the form, or null when adding
+
+function openForm(s) {
+  const f = $("#addForm");
+  editingId = s ? s.id : null;
+  f.reset();
+  if (s) { f.elements.name.value = s.name; f.elements.cwd.value = s.cwd ?? ""; f.elements.command.value = s.command ?? ""; f.elements.port.value = s.ports[0]; }
+  $("#formTitle").textContent = s ? `Edit ${s.name}` : "Add a server";
+  $("#formSubmit").textContent = s ? "Save changes" : "Add server";
+  $("#formError").textContent = "";
+  f.hidden = false;
+  f.scrollIntoView({ block: "nearest" });
+  $("#f-name").focus();
+}
+function closeForm() { $("#addForm").hidden = true; editingId = null; $("#formError").textContent = ""; }
 
 async function api(method, path, body) {
   const res = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -161,6 +176,7 @@ function card(s) {
     `<button data-act="logs">Logs</button>`,
     running ? `<button data-act="restart" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Restart</button>` : "",
     running && !s.pinned ? `<button data-act="pin" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Pin</button>` : "",
+    s.pinned ? `<button data-act="edit">Edit</button>` : "",
     s.pinned ? `<button data-act="remove" class="danger">Remove</button>` : "",
   ].join("");
   const switchLabel = b === "starting" ? "Starting" : b === "stopping" ? "Stopping" : running ? `Turn ${s.name} off` : `Turn ${s.name} on`;
@@ -255,6 +271,8 @@ document.addEventListener("click", async (ev) => {
       await api("POST", "/api/restart", s.rootPid ? { rootPid: s.rootPid } : { id });
     } else if (act === "pin" && s) {
       await api("POST", "/api/pin", { rootPid: s.rootPid });
+    } else if (act === "edit" && s) {
+      openForm(s);
     } else if (act === "remove" && s) {
       await api("DELETE", `/api/pin/${encodeURIComponent(id)}`);
     } else if (act === "logs" && s) {
@@ -276,16 +294,17 @@ document.addEventListener("click", async (ev) => {
 });
 
 $("#logClose").onclick = () => { openLog = null; $("#logs").classList.remove("open"); document.body.classList.remove("logs-open"); };
-$("#addBtn").onclick = () => { const f = $("#addForm"); f.hidden = !f.hidden; if (!f.hidden) $("#f-name").focus(); };
-$("#addCancel").onclick = () => { $("#addForm").hidden = true; $("#formError").textContent = ""; };
+$("#addBtn").onclick = () => ($("#addForm").hidden ? openForm(null) : closeForm());
+$("#addCancel").onclick = closeForm;
 $("#addForm").onsubmit = async (ev) => {
   ev.preventDefault();
   const f = ev.target;
   const data = Object.fromEntries(new FormData(f));
   const body = { name: data.name, cwd: data.cwd, command: data.command, port: Number(data.port) };
   try {
-    await api("POST", "/api/pinned", body);
-    f.reset(); f.hidden = true; $("#formError").textContent = "";
+    if (editingId) await api("PUT", `/api/pinned/${encodeURIComponent(editingId)}`, body);
+    else await api("POST", "/api/pinned", body);
+    closeForm();
     refresh();
   } catch (e) { $("#formError").textContent = e.message; }
 };

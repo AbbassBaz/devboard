@@ -42,6 +42,17 @@ export class Registry {
     return pinned;
   }
 
+  /** Replace `oldId` with new values; the id may change when name or port change. Returns undefined if `oldId` is unknown. */
+  async replace(oldId: string, input: Omit<Pinned, "id">): Promise<Pinned | undefined> {
+    const list = await this.load();
+    if (!list.some((p) => p.id === oldId)) return undefined;
+    const pinned: Pinned = { id: pinnedId(input.name, input.port), ...input };
+    const next = list.filter((p) => p.id !== oldId && p.id !== pinned.id);
+    next.push(pinned);
+    await this.save(next);
+    return pinned;
+  }
+
   async pin(running: RunningService, name?: string): Promise<Pinned> {
     if (!running.cwd) throw new Error("cannot pin a service whose working directory is unknown");
     return this.add({ name: name ?? running.name, cwd: running.cwd, command: running.command, port: running.ports[0] });

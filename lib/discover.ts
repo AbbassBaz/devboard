@@ -81,9 +81,16 @@ export function isWrapper(p: Process): boolean {
 export function commandOf(args: string): string {
   const trimmed = args.trim();
   const tokens = trimmed.split(/\s+/);
-  if (!SHELL_EXES.has(exeName(trimmed)) || tokens[1] !== "-c") return trimmed;
-  const afterExe = trimmed.slice(tokens[0].length);
-  return afterExe.slice(afterExe.indexOf("-c") + 2).trim();
+  if (SHELL_EXES.has(exeName(trimmed)) && tokens[1] === "-c") {
+    const afterExe = trimmed.slice(tokens[0].length);
+    return commandOf(afterExe.slice(afterExe.indexOf("-c") + 2));
+  }
+  // npx rewrites itself to `npm exec <cmd> <args>` without a `--`; re-running that lets npm
+  // eat flags meant for the command (`--port 3001` became `next dev 3001`). Insert the separator.
+  if (tokens[0] === "npm" && tokens[1] === "exec" && tokens.length > 2 && !tokens.includes("--")) {
+    return `npm exec -- ${tokens.slice(2).join(" ")}`;
+  }
+  return trimmed;
 }
 
 export function isRuntime(p: Process): boolean {

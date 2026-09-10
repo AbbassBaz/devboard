@@ -72,6 +72,18 @@ describe("POST /api/pinned (hand-entered server)", () => {
     await registry.unpin("home-thing-39992");
   });
 
+  test("PUT /api/pinned/:id edits a saved service and 404s for unknown ids", async () => {
+    running = [];
+    await registry.save([{ id: "dash-3001", name: "dash", cwd: home, command: "npm exec next dev --port 3001", port: 3001 }]);
+    const res = await call("PUT", "/api/pinned/dash-3001", { name: "dashboard", cwd: home, command: "npm exec -- next dev --port 3001", port: 3001 });
+    expect(res.status).toBe(200);
+    expect((await res.json()).pinned).toEqual({ id: "dashboard-3001", name: "dashboard", cwd: home, command: "npm exec -- next dev --port 3001", port: 3001 });
+    expect((await registry.load()).map((p) => p.id)).toEqual(["dashboard-3001"]);
+    expect((await call("PUT", "/api/pinned/dash-3001", { name: "x", cwd: home, command: "true", port: 1 })).status).toBe(404);
+    expect((await call("PUT", "/api/pinned/dashboard-3001", { name: "x", cwd: home, command: "true", port: 0 })).status).toBe(400);
+    await registry.save([]);
+  });
+
   test("rejects missing fields, bad ports and folders that do not exist", async () => {
     expect((await call("POST", "/api/pinned", { cwd: home, command: "true", port: 1 })).status).toBe(400);
     expect((await call("POST", "/api/pinned", { name: "x", cwd: home, command: "true", port: "abc" })).status).toBe(400);
