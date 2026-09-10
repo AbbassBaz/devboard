@@ -32,9 +32,17 @@ the same PATH (fnm's node, pnpm, bun).
 - **Start / Restart.** Runs the saved command in its folder via `/bin/sh -c`,
   detached in its own process group, output appended to
   `~/.devboard/logs/<id>.log`. Closing devboard does not stop what it started.
-- **Logs.** Last 300 lines of that file, refreshed every 2 seconds, in a pane at the
-  bottom of the page. A service that devboard did not start has no log yet; the pane
-  says so and offers to restart it under devboard.
+- **Logs.** Last 2000 lines of that file, refreshed every 2 seconds, in a sidebar on the
+  right. Drag its left edge to resize; the width is remembered. Filter lines by text,
+  Follow keeps the newest line in view and pauses when you scroll up, Escape closes.
+  A service that devboard did not start has no log yet; the pane says so and offers to
+  restart it under devboard.
+- **Hide.** Moves a card into the collapsed Hidden list below the board, for things like
+  editor helpers that happen to listen on a port. Show brings it back. Stored in
+  `~/.devboard/ignored.json`.
+- **Start all / Stop all.** Header buttons. Start all switches on every saved server that
+  is off. Stop all asks first, then switches off every running dev server, pinning the
+  unsaved ones so they can be switched back on.
 - **Add server.** The button in the header opens a form for name, folder, command and
   port. The folder must exist. The new card starts switched off; switch it on to run it.
 - **Edit.** Pinned cards have an Edit action that opens the same form pre-filled. The
