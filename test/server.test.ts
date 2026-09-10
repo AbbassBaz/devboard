@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Control, isAlive } from "../lib/control";
 import { scanProcesses } from "../lib/discover";
 import { Registry } from "../lib/registry";
-import type { Process, RunningService } from "../lib/types";
+import type { Process, RunningService, Service } from "../lib/types";
 import { createHandler } from "../server";
 
 const home = mkdtempSync(join(tmpdir(), "devboard-"));
@@ -55,8 +55,8 @@ describe("GET /api/services", () => {
     const body = await res.json();
     expect(body.generatedAt).toBeString();
     expect(body.services).toHaveLength(2);
-    expect(body.services.find((s: any) => s.rootPid === 64672)).toMatchObject({ status: "running", pinned: false });
-    expect(body.services.find((s: any) => s.id === "core-api-3003")).toMatchObject({ status: "stopped", pinned: true });
+    expect(body.services.find((s: Service) => s.rootPid === 64672)).toMatchObject({ status: "running", pinned: false });
+    expect(body.services.find((s: Service) => s.id === "core-api-3003")).toMatchObject({ status: "stopped", pinned: true });
   });
 });
 
