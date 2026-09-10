@@ -1,4 +1,4 @@
-import type { Listener, Process } from "./types";
+import type { Listener, Process, RunningService } from "./types";
 
 export function parseListeners(text: string): Listener[] {
   const out: Listener[] = [];
@@ -105,4 +105,47 @@ export function treePids(rootPid: number, byPpid: Map<number, Process[]>): numbe
     for (const child of byPpid.get(out[i]) ?? []) out.push(child.pid);
   }
   return out;
+}
+
+export function groupServices(listeners: Listener[], processes: Process[], selfPid: number): RunningService[] {
+  const { byPid, byPpid } = indexProcesses(processes);
+  const portsByRoot = new Map<number, Set<number>>();
+  for (const l of listeners) {
+    const root = findRoot(l.pid, byPid, selfPid);
+    const ports = portsByRoot.get(root) ?? new Set<number>();
+    ports.add(l.port);
+    portsByRoot.set(root, ports);
+  }
+  const out: RunningService[] = [];
+  for (const [rootPid, ports] of portsByRoot) {
+    const root = byPid.get(rootPid);
+    if (!root) continue;
+    const pids = treePids(rootPid, byPpid);
+    if (pids.includes(selfPid)) continue;
+    const tree = pids.map((pid) => byPid.get(pid)).filter((p): p is Process => !!p);
+    out.push({
+      rootPid,
+      pids,
+      ports: [...ports].sort((a, b) => a - b),
+      command: root.args,
+      name: exeName(root.args),
+      kind: isWrapper(root) || isRuntime(root) ? "dev" : "system",
+      uptime: root.etime,
+      cpu: Math.round(tree.reduce((sum, p) => sum + p.pcpu, 0) * 10) / 10,
+      memMb: Math.round(tree.reduce((sum, p) => sum + p.rss, 0) / 1024),
+    });
+  }
+  return out.sort((a, b) => a.ports[0] - b.ports[0]);
+}
+
+export function applyCwds(
+  services: RunningService[],
+  cwds: Map<number, string>,
+  names: Map<number, string>,
+): RunningService[] {
+  return services.map((s) => {
+    const cwd = cwds.get(s.rootPid);
+    const folder = cwd ? cwd.slice(cwd.lastIndexOf("/") + 1) : undefined;
+    return { ...s, cwd, name: names.get(s.rootPid) ?? folder ?? s.name };
+  });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { exeName, findRoot, indexProcesses, isWrapper, parseCwds, parseListeners, parseProcesses, treePids } from "../lib/discover";
+import { applyCwds, exeName, findRoot, groupServices, indexProcesses, isWrapper, parseCwds, parseListeners, parseProcesses, treePids } from "../lib/discover";
 
 const listenersText = await Bun.file(new URL("./fixtures/lsof-listeners.txt", import.meta.url)).text();
 const psText = await Bun.file(new URL("./fixtures/ps.txt", import.meta.url)).text();
@@ -96,5 +96,65 @@ describe("tree walk", () => {
   test("treePids returns the root and all descendants", () => {
     expect(treePids(64672, byPpid).sort()).toEqual([64672, 64728, 64734]);
     expect(treePids(41727, byPpid)).toEqual([41727]);
+  });
+});
+
+describe("groupServices", () => {
+  const listeners = parseListeners(listenersText);
+  const procs = parseProcesses(psText);
+  const services = groupServices(listeners, procs, 99999);
+
+  test("one service per tree root, excluding devboard's own tree, sorted by first port", () => {
+    expect(services.map((s) => s.rootPid)).toEqual([41727, 68729, 77777, 64672, 64671, 683, 835, 652]);
+    expect(services.map((s) => s.ports[0])).toEqual([3000, 3001, 3003, 3010, 4010, 5000, 6379, 63951]);
+  });
+
+  test("a service started by devboard is its own root and is not hidden with devboard", () => {
+    const api = services.find((s) => s.rootPid === 77777)!;
+    expect(api.pids.sort()).toEqual([77777, 77778]);
+    expect(api.ports).toEqual([3003]);
+    expect(api.kind).toBe("dev");
+    expect(services.some((s) => s.pids.includes(99999))).toBe(false);
+  });
+
+  test("a Next.js dev server collapses its three processes into one row", () => {
+    const docs = services.find((s) => s.rootPid === 64672)!;
+    expect(docs.pids.sort()).toEqual([64672, 64728, 64734]);
+    expect(docs.ports).toEqual([3010]);
+    expect(docs.command).toBe("node /Users/abbassbaz/.local/state/fnm_multishells/51664_1787044842120/bin/pnpm dev");
+    expect(docs.kind).toBe("dev");
+    expect(docs.uptime).toBe("23-01:48:35");
+    expect(docs.memMb).toBe(149); // (60000 + 80000 + 12288) / 1024 rounded
+    expect(docs.name).toBe("node");
+  });
+
+  test("ControlCenter is system with both ports", () => {
+    const cc = services.find((s) => s.rootPid === 683)!;
+    expect(cc.kind).toBe("system");
+    expect(cc.ports).toEqual([5000, 7000]);
+    expect(cc.name).toBe("ControlCenter");
+  });
+
+  test("a bare bun watch process is its own root and is dev", () => {
+    const proxy = services.find((s) => s.rootPid === 41727)!;
+    expect(proxy.pids).toEqual([41727]);
+    expect(proxy.kind).toBe("dev");
+  });
+});
+
+describe("applyCwds", () => {
+  test("sets cwd and derives name from package.json name or folder basename", () => {
+    const services = groupServices(parseListeners(listenersText), parseProcesses(psText), 99999);
+    const cwds = parseCwds(cwdText);
+    const names = new Map([[64672, "oncore-docs"]]);
+    const out = applyCwds(services, cwds, names);
+    const docs = out.find((s) => s.rootPid === 64672)!;
+    expect(docs.cwd).toBe("/Users/abbassbaz/Desktop/Sadie/OnCoreDocs");
+    expect(docs.name).toBe("oncore-docs");
+    const proxy = out.find((s) => s.rootPid === 41727)!;
+    expect(proxy.name).toBe("core-proxy");
+    const cc = out.find((s) => s.rootPid === 683)!;
+    expect(cc.cwd).toBeUndefined();
+    expect(cc.name).toBe("ControlCenter");
   });
 });
