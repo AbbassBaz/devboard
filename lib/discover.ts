@@ -55,3 +55,54 @@ export function parseCwds(text: string): Map<number, string> {
   }
   return out;
 }
+
+const WRAPPER_EXES = new Set(["node", "bun", "deno", "npm", "npx", "pnpm", "yarn", "next", "next-server"]);
+const SHELL_EXES = new Set(["sh", "bash", "zsh"]);
+const RUNTIME_EXES = new Set(["python", "python3", "uvicorn", "ruby", "java", "go", "cargo"]);
+
+export function exeName(args: string): string {
+  const first = args.trim().split(/\s+/)[0] ?? "";
+  return first.slice(first.lastIndexOf("/") + 1);
+}
+
+export function isWrapper(p: Process): boolean {
+  const exe = exeName(p.args);
+  if (WRAPPER_EXES.has(exe)) return true;
+  if (SHELL_EXES.has(exe)) return p.args.trim().split(/\s+/)[1] === "-c";
+  return false;
+}
+
+export function isRuntime(p: Process): boolean {
+  return RUNTIME_EXES.has(exeName(p.args));
+}
+
+export function indexProcesses(procs: Process[]) {
+  const byPid = new Map<number, Process>();
+  const byPpid = new Map<number, Process[]>();
+  for (const p of procs) {
+    byPid.set(p.pid, p);
+    const siblings = byPpid.get(p.ppid) ?? [];
+    siblings.push(p);
+    byPpid.set(p.ppid, siblings);
+  }
+  return { byPid, byPpid };
+}
+
+export function findRoot(pid: number, byPid: Map<number, Process>, stopAt: number): number {
+  let current = pid;
+  for (;;) {
+    const proc = byPid.get(current);
+    if (!proc) return current;
+    const parent = byPid.get(proc.ppid);
+    if (!parent || parent.pid <= 1 || parent.pid === stopAt || !isWrapper(parent)) return current;
+    current = parent.pid;
+  }
+}
+
+export function treePids(rootPid: number, byPpid: Map<number, Process[]>): number[] {
+  const out = [rootPid];
+  for (let i = 0; i < out.length; i++) {
+    for (const child of byPpid.get(out[i]) ?? []) out.push(child.pid);
+  }
+  return out;
+}
