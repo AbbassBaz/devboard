@@ -64,4 +64,4 @@ the same PATH (fnm's node, pnpm, bun).
 8. Start devboard again. The row is still there. Click **Restart**. The pid
    changes, the log gets a second header. Click **Kill**, then **Unpin**.
 
-Last run: 2026-09-10, all eight steps held, driven through the API with curl.
+`bash scripts/smoke.sh` runs these eight steps against a real devboard through the API. Last run 2026-09-10: passed.

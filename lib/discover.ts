@@ -72,6 +72,20 @@ export function isWrapper(p: Process): boolean {
   return false;
 }
 
+/**
+ * The command to re-run a root with. `ps` flattens argv, so `sh -c '<script>'` shows as
+ * `sh -c <script>` with the quoting gone; re-running that through another `sh -c` would only
+ * execute the script's first word. The script itself is one argv element and is reproduced
+ * verbatim, so strip the wrapper and keep the script.
+ */
+export function commandOf(args: string): string {
+  const trimmed = args.trim();
+  const tokens = trimmed.split(/\s+/);
+  if (!SHELL_EXES.has(exeName(trimmed)) || tokens[1] !== "-c") return trimmed;
+  const afterExe = trimmed.slice(tokens[0].length);
+  return afterExe.slice(afterExe.indexOf("-c") + 2).trim();
+}
+
 export function isRuntime(p: Process): boolean {
   return RUNTIME_EXES.has(exeName(p.args));
 }
@@ -144,7 +158,7 @@ export function groupServices(listeners: Listener[], processes: Process[], selfP
       rootPid,
       pids,
       ports: [...ports].sort((a, b) => a - b),
-      command: root.args,
+      command: commandOf(root.args),
       name: exeName(root.args),
       kind: isWrapper(root) || isRuntime(root) ? "dev" : "system",
       uptime: root.etime,

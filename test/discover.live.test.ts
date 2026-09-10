@@ -35,5 +35,6 @@ test("discover() finds a real sh -c bun tree with cwd, ports and kind", async ()
   expect(svc!.kind).toBe("dev");
   expect(svc!.cwd).toBe(process.cwd());
   expect(svc!.name).toBe("devboard"); // package.json name of this project
-  expect(svc!.command.startsWith("/bin/sh -c bun -e")).toBe(true);
+  expect(svc!.command.startsWith("bun -e '")).toBe(true); // the sh -c wrapper is stripped
+  expect(svc!.command.endsWith("; exit 0")).toBe(true);
 }, 15000);

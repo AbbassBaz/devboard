@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyCwds, exeName, findRoot, groupServices, indexProcesses, isWrapper, parseCwds, parseListeners, parseProcesses, selfAndAncestors, treePids } from "../lib/discover";
+import { applyCwds, commandOf, exeName, findRoot, groupServices, indexProcesses, isWrapper, parseCwds, parseListeners, parseProcesses, selfAndAncestors, treePids } from "../lib/discover";
 
 const listenersText = await Bun.file(new URL("./fixtures/lsof-listeners.txt", import.meta.url)).text();
 const psText = await Bun.file(new URL("./fixtures/ps.txt", import.meta.url)).text();
@@ -56,7 +56,7 @@ describe("tree walk", () => {
   const SELF = selfAndAncestors(99999, byPid);
 
   test("selfAndAncestors walks up to launchd without including it", () => {
-    expect([...SELF]).toEqual([99999, 99998, 51664]); // 51000 (iTerm) is not in the table, so the walk ends
+    expect([...SELF]).toEqual([99999, 99998, 51664, 51000]); // 51000 (iTerm) is not in the table, so the walk ends there
     expect([...selfAndAncestors(41727, byPid)]).toEqual([41727]);
   });
 
@@ -65,6 +65,15 @@ describe("tree walk", () => {
     expect(exeName("/opt/homebrew/opt/redis/bin/redis-server 127.0.0.1:6379")).toBe("redis-server");
     expect(exeName("next-server (v16.3.1)")).toBe("next-server");
     expect(exeName("-zsh")).toBe("-zsh");
+  });
+
+  test("commandOf strips a leading sh -c wrapper and keeps the script verbatim", () => {
+    expect(commandOf("/bin/sh -c bun run --watch src/index.ts")).toBe("bun run --watch src/index.ts");
+    expect(commandOf("sh -c bun -e 'Bun.serve({port:3999})'; exit 0")).toBe("bun -e 'Bun.serve({port:3999})'; exit 0");
+    expect(commandOf("/bin/zsh -c pnpm dev")).toBe("pnpm dev");
+    expect(commandOf("node /x/pnpm dev")).toBe("node /x/pnpm dev");
+    expect(commandOf("bash deploy.sh -c")).toBe("bash deploy.sh -c");
+    expect(commandOf("-zsh")).toBe("-zsh");
   });
 
   test("isWrapper accepts JS runtimes, package managers, and sh -c only", () => {
@@ -133,6 +142,7 @@ describe("groupServices", () => {
     expect(api.pids.sort()).toEqual([77777, 77778]);
     expect(api.ports).toEqual([3003]);
     expect(api.kind).toBe("dev");
+    expect(api.command).toBe("bun run --watch src/index.ts"); // sh -c wrapper stripped, so restart re-runs it correctly
     expect(services.some((s) => s.pids.includes(99999))).toBe(false);
   });
 
