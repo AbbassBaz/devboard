@@ -58,6 +58,26 @@ export class Registry {
     return this.add({ name: name ?? running.name, cwd: running.cwd, command: running.command, port: running.ports[0] });
   }
 
+  get ignoredPath(): string {
+    return join(this.home, "ignored.json");
+  }
+
+  async loadIgnored(): Promise<Set<string>> {
+    const file = Bun.file(this.ignoredPath);
+    if (!(await file.exists())) return new Set();
+    return new Set((await file.json()) as string[]);
+  }
+
+  async setIgnored(id: string, ignored: boolean): Promise<void> {
+    const set = await this.loadIgnored();
+    if (ignored) set.add(id);
+    else set.delete(id);
+    await mkdir(this.home, { recursive: true });
+    const tmp = `${this.ignoredPath}.tmp`;
+    await Bun.write(tmp, JSON.stringify([...set].sort(), null, 2) + "\n");
+    await rename(tmp, this.ignoredPath);
+  }
+
   async unpin(id: string): Promise<boolean> {
     const list = await this.load();
     const next = list.filter((p) => p.id !== id);

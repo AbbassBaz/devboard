@@ -13,7 +13,7 @@
     --on: #62d69f; --on-deep: #0b3a26; --warn: #d9a441; --danger: #df5f5b;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --sans: -apple-system, "SF Pro Text", system-ui, sans-serif;
-    --pane: 38vh;
+    --pane: 640px;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -33,8 +33,8 @@
   .ghost:hover { border-color: var(--on); color: var(--on); }
   .ghost.danger:hover { border-color: var(--danger); color: var(--danger); }
 
-  main { padding: 10px 28px 48px; transition: padding-bottom .2s; }
-  body.logs-open main { padding-bottom: calc(var(--pane) + 32px); }
+  main { padding: 10px 28px 48px; }
+  body.logs-open main, body.logs-open header.top { padding-right: calc(min(var(--pane), 92vw) + 28px); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
 
   .card { position: relative; background: var(--card); border: 1px solid var(--edge); border-radius: 12px; padding: 16px 16px 14px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
@@ -85,18 +85,30 @@
   .sysrow .n { color: var(--fg); } .sysrow .c { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
   .sysrow button { color: var(--muted); font-size: 12px; } .sysrow button:hover { color: var(--danger); }
 
-  #logs { position: fixed; left: 0; right: 0; bottom: 0; height: var(--pane); background: #070a09; border-top: 1px solid var(--edge-hi); display: none; flex-direction: column; box-shadow: 0 -12px 40px rgba(0,0,0,.5); }
+  #logs { position: fixed; top: 0; right: 0; bottom: 0; width: min(var(--pane), 92vw); background: #070a09; border-left: 1px solid var(--edge-hi); display: none; flex-direction: column; box-shadow: -12px 0 40px rgba(0,0,0,.5); }
   #logs.open { display: flex; }
-  #logs .bar { display: flex; align-items: center; gap: 14px; padding: 10px 20px; border-bottom: 1px solid var(--edge); }
-  #logs .bar strong { font: 600 13px var(--mono); }
-  #logs .bar .meta { color: var(--muted); margin-right: auto; }
-  #logs pre { flex: 1; margin: 0; padding: 12px 20px 20px; overflow: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; color: #c7d1cc; }
-  #logs .note { padding: 22px 20px; color: var(--muted); max-width: 60ch; line-height: 1.55; }
+  #logs .grip { position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: col-resize; }
+  #logs .grip:hover, #logs .grip.active { background: linear-gradient(90deg, transparent, rgba(98,214,159,.35), transparent); }
+  #logs .bar { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--edge); }
+  #logs .bar strong { font: 600 13px var(--mono); white-space: nowrap; }
+  #logs .bar .meta { color: var(--muted); margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pane-tools { display: flex; align-items: center; gap: 14px; padding: 8px 16px; border-bottom: 1px solid var(--edge); }
+  .pane-tools input.filter { flex: 1; font: 12px var(--mono); color: var(--fg); background: #0a0f0d; border: 1px solid var(--edge-hi); border-radius: 6px; padding: 5px 8px; min-width: 0; }
+  .pane-tools input.filter:focus { outline: none; border-color: var(--on); }
+  .pane-tools label { color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; }
+  .pane-tools input[type=checkbox] { accent-color: var(--on); }
+  .pane-tools #logCount { color: var(--dim); white-space: nowrap; }
+  #logBody { flex: 1; min-height: 0; overflow: auto; }
+  #logBody pre { margin: 0; padding: 12px 16px 24px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; color: #c7d1cc; }
+  #logBody mark { background: rgba(98,214,159,.25); color: inherit; }
+  #logs .note { padding: 22px 16px; color: var(--muted); max-width: 60ch; line-height: 1.55; }
   #logs .note strong { color: var(--fg); }
   #logs .note .ghost { margin-top: 12px; display: inline-block; }
 
   #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--danger); color: #fff; padding: 9px 14px; border-radius: 8px; display: none; max-width: 80vw; z-index: 2; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  .hiddenrow { display: flex; gap: 14px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--edge); color: var(--muted); }
+  .hiddenrow .n { color: var(--fg); } .hiddenrow button { color: var(--muted); font-size: 12px; } .hiddenrow button:hover { color: var(--on); }
   @media (max-width: 640px) { header.top { flex-wrap: wrap; } main { padding: 10px 16px 48px; } .sysrow { grid-template-columns: 1fr auto; } .sysrow .c, .sysrow .p { display: none; } }
 </style>
 </head>
@@ -104,6 +116,8 @@
 <header class="top">
   <div class="brand"><span class="mark"></span><h1>devboard</h1></div>
   <span class="mono" id="stamp">connecting…</span>
+  <button class="ghost" id="startAll" title="Switch on every saved server that is off">Start all</button>
+  <button class="ghost danger" id="stopAll" title="Switch off every running dev server">Stop all</button>
   <button class="ghost" id="addBtn">+ Add server</button>
 </header>
 <main>
@@ -123,9 +137,19 @@
     <summary>System processes <span id="sysCount"></span></summary>
     <div id="sysList"></div>
   </details>
+  <details class="sys" id="hiddenSec" hidden>
+    <summary>Hidden cards <span id="hiddenCount"></span></summary>
+    <div id="hiddenList"></div>
+  </details>
 </main>
-<section id="logs" aria-live="polite">
+<section id="logs">
+  <div class="grip" id="grip" title="Drag to resize"></div>
   <div class="bar"><strong id="logTitle"></strong><span class="meta mono" id="logMeta"></span><button class="ghost" id="logClose">Close</button></div>
+  <div class="pane-tools mono">
+    <input class="filter" id="logFilter" placeholder="Filter lines" autocomplete="off" spellcheck="false">
+    <label><input type="checkbox" id="logFollow" checked> Follow</label>
+    <span id="logCount"></span>
+  </div>
   <div id="logBody"></div>
 </section>
 <div id="toast" role="status"></div>
@@ -178,6 +202,7 @@ function card(s) {
     running && !s.pinned ? `<button data-act="pin" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Pin</button>` : "",
     s.pinned ? `<button data-act="edit">Edit</button>` : "",
     s.pinned ? `<button data-act="remove" class="danger">Remove</button>` : "",
+    `<button data-act="hide" title="Move this card to the hidden list">Hide</button>`,
   ].join("");
   const switchLabel = b === "starting" ? "Starting" : b === "stopping" ? "Stopping" : running ? `Turn ${s.name} off` : `Turn ${s.name} on`;
   return `<article class="card ${state}" data-id="${esc(s.id)}" data-name="${esc(s.name)}">
@@ -196,9 +221,19 @@ function sysRow(s) {
   return `<div class="sysrow mono" data-id="${esc(s.id)}" data-name="${esc(s.name)}"><span class="n">${esc(s.name)}</span><span class="p">${s.ports.map((p) => ":" + p).join("  ")}</span><span>${s.rootPid}</span><span class="c" title="${esc(s.command)}">${esc(s.command)}</span><button data-act="kill-sys" data-root="${s.rootPid}">Kill</button></div>`;
 }
 
+function hiddenRow(s) {
+  return `<div class="hiddenrow mono" data-id="${esc(s.id)}"><span class="n">${esc(s.name)}</span><span>${s.ports.map((p) => ":" + p).join("  ")}</span><span>${s.status}</span><button data-act="unhide">Show</button></div>`;
+}
+
 function render() {
-  const dev = latest.filter((s) => s.kind === "dev");
+  const dev = latest.filter((s) => s.kind === "dev" && !s.hidden);
+  const hidden = latest.filter((s) => s.kind === "dev" && s.hidden);
   const sys = latest.filter((s) => s.kind === "system");
+  $("#hiddenSec").hidden = hidden.length === 0;
+  $("#hiddenList").innerHTML = hidden.map(hiddenRow).join("");
+  $("#hiddenCount").textContent = `(${hidden.length})`;
+  $("#startAll").disabled = !dev.some((s) => s.status === "stopped");
+  $("#stopAll").disabled = !dev.some((s) => s.status === "running");
   for (const [id, { state, at }] of busy) {
     const s = dev.find((x) => x.id === id);
     const settled = (state === "starting" && s?.status === "running") || (state === "stopping" && (!s || s.status === "stopped"));
@@ -224,29 +259,91 @@ async function refresh() {
 }
 const refreshSoon = () => [700, 1600, 3000].forEach((ms) => setTimeout(refresh, ms));
 
+let logLines = []; // last fetched lines for the open log; the filter re-renders from this without refetching
+function paintLog() {
+  const body = $("#logBody");
+  const q = $("#logFilter").value.trim().toLowerCase();
+  const shown = q ? logLines.filter((l) => l.toLowerCase().includes(q)) : logLines;
+  let pre = body.querySelector("pre");
+  if (!pre) { body.innerHTML = "<pre></pre>"; pre = body.firstChild; }
+  if (q) {
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig");
+    pre.innerHTML = shown.map((l) => esc(l).replace(re, (m) => `<mark>${m}</mark>`)).join("\n");
+  } else {
+    pre.textContent = shown.join("\n");
+  }
+  $("#logCount").textContent = q ? `${shown.length} of ${logLines.length} lines` : `${logLines.length} lines`;
+  if ($("#logFollow").checked) body.scrollTop = body.scrollHeight;
+}
+
 async function renderLog() {
   if (!openLog) return;
   const s = latest.find((x) => x.id === openLog);
   const body = $("#logBody");
   $("#logTitle").textContent = s ? s.name : openLog;
-  if (!s) { body.innerHTML = `<div class="note">This service is no longer on the board.</div>`; $("#logMeta").textContent = ""; return; }
+  if (!s) { body.innerHTML = `<div class="note">This service is no longer on the board.</div>`; $("#logMeta").textContent = ""; $("#logCount").textContent = ""; return; }
   if (!s.hasLog) {
     $("#logMeta").textContent = "no output captured";
+    $("#logCount").textContent = "";
     body.innerHTML = s.status === "running"
       ? `<div class="note"><strong>${esc(s.name)}</strong> was started from a terminal, so its output is going there. devboard can only show output of services it starts itself.<br><button class="ghost" data-act="restart" data-id="${esc(s.id)}">Restart ${esc(s.name)} here</button> <span style="margin-left:10px">and the log appears within a few seconds.</span></div>`
       : `<div class="note"><strong>${esc(s.name)}</strong> has never been started from devboard. Switch it on and its output lands here.</div>`;
     return;
   }
   try {
-    const { lines, size } = await api("GET", `/api/logs/${encodeURIComponent(s.id)}?lines=300`);
-    let pre = body.querySelector("pre");
-    if (!pre) { body.innerHTML = "<pre></pre>"; pre = body.firstChild; }
-    const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 12;
-    pre.textContent = lines.join("\n");
-    $("#logMeta").textContent = `${(size / 1024).toFixed(0)} KB  last ${lines.length} lines  ~/.devboard/logs/${s.id}.log`;
-    if (stick) pre.scrollTop = pre.scrollHeight;
+    const { lines, size } = await api("GET", `/api/logs/${encodeURIComponent(s.id)}?lines=2000`);
+    logLines = lines;
+    $("#logMeta").textContent = `${(size / 1024).toFixed(0)} KB   ~/.devboard/logs/${s.id}.log`;
+    paintLog();
   } catch (e) { toast(e.message); }
 }
+function openPane(id) {
+  openLog = id; logLines = [];
+  $("#logFilter").value = ""; $("#logFollow").checked = true;
+  $("#logBody").innerHTML = "";
+  $("#logs").classList.add("open"); document.body.classList.add("logs-open");
+  renderLog();
+}
+function closePane() { openLog = null; $("#logs").classList.remove("open"); document.body.classList.remove("logs-open"); }
+$("#logFilter").oninput = paintLog;
+$("#logFollow").onchange = () => { if ($("#logFollow").checked) $("#logBody").scrollTop = $("#logBody").scrollHeight; };
+$("#logBody").addEventListener("scroll", () => {
+  const b = $("#logBody");
+  const atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 8;
+  if (!atBottom && $("#logFollow").checked) $("#logFollow").checked = false; // scrolling up pauses follow
+  else if (atBottom && !$("#logFollow").checked) $("#logFollow").checked = true;
+});
+
+// Drag the pane's left edge to resize; the width is remembered per browser.
+try { const w = Number(localStorage.getItem("devboard.pane")); if (w >= 360) document.documentElement.style.setProperty("--pane", w + "px"); } catch {}
+$("#grip").addEventListener("pointerdown", (ev) => {
+  const grip = ev.currentTarget; grip.setPointerCapture(ev.pointerId); grip.classList.add("active");
+  const move = (e) => document.documentElement.style.setProperty("--pane", Math.max(360, Math.min(window.innerWidth * 0.92, window.innerWidth - e.clientX)) + "px");
+  const up = () => { grip.classList.remove("active"); grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up); try { localStorage.setItem("devboard.pane", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--pane"))); } catch {} };
+  grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up);
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape") return;
+  if (openLog) closePane(); else if (!$("#addForm").hidden) closeForm();
+});
+
+async function switchAll(on) {
+  const dev = latest.filter((s) => s.kind === "dev" && !s.hidden);
+  const targets = dev.filter((s) => (on ? s.status === "stopped" : s.status === "running"));
+  if (!targets.length) return;
+  if (!on && !confirm(`Switch off ${targets.length} running dev server${targets.length > 1 ? "s" : ""}? Unsaved ones get pinned first so you can switch them back on.`)) return;
+  for (const s of targets) setBusy(s.id, on ? "starting" : "stopping");
+  render();
+  for (const s of targets) {
+    try {
+      if (on) await api("POST", "/api/start", { id: s.id });
+      else { if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid }); await api("POST", "/api/kill", { rootPid: s.rootPid }); }
+    } catch (e) { busy.delete(s.id); toast(`${s.name}: ${e.message}`); }
+  }
+  refresh(); refreshSoon();
+}
+$("#startAll").onclick = () => switchAll(true);
+$("#stopAll").onclick = () => switchAll(false);
 
 document.addEventListener("click", async (ev) => {
   const btn = ev.target.closest("button[data-act]");
@@ -276,9 +373,12 @@ document.addEventListener("click", async (ev) => {
     } else if (act === "remove" && s) {
       await api("DELETE", `/api/pin/${encodeURIComponent(id)}`);
     } else if (act === "logs" && s) {
-      openLog = id;
-      $("#logs").classList.add("open");
-      document.body.classList.add("logs-open");
+      openPane(id);
+    } else if (act === "hide" && s) {
+      await api("POST", "/api/ignore", { id });
+      if (openLog === id) closePane();
+    } else if (act === "unhide" && s) {
+      await api("DELETE", `/api/ignore/${encodeURIComponent(id)}`);
     } else if (act === "kill-sys") {
       const name = holder?.dataset.name || "this process";
       if (confirm(`Kill ${name}? It is a system process and macOS may restart it.`)) await api("POST", "/api/kill", { rootPid: Number(btn.dataset.root) });
@@ -293,7 +393,7 @@ document.addEventListener("click", async (ev) => {
   }
 });
 
-$("#logClose").onclick = () => { openLog = null; $("#logs").classList.remove("open"); document.body.classList.remove("logs-open"); };
+$("#logClose").onclick = closePane;
 $("#addBtn").onclick = () => ($("#addForm").hidden ? openForm(null) : closeForm());
 $("#addCancel").onclick = closeForm;
 $("#addForm").onsubmit = async (ev) => {

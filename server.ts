@@ -51,8 +51,8 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       }
 
       if (method === "GET" && pathname === "/api/services") {
-        const [running, pinned] = await Promise.all([deps.discover(), registry.load()]);
-        const services = mergeServices(running, pinned, (id) => control.hasLog(id));
+        const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
+        const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
         return json({ services, generatedAt: new Date().toISOString() });
       }
 
@@ -123,6 +123,18 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const svc = await findRunning(rootPid);
         if (!svc) return fail("no running service with that rootPid", 404);
         return json({ pinned: await registry.pin(svc, typeof name === "string" && name ? name : undefined) });
+      }
+
+      if (method === "POST" && pathname === "/api/ignore") {
+        const { id } = await readBody(req);
+        if (typeof id !== "string" || !id) return fail("id required");
+        await registry.setIgnored(id, true);
+        return json({ ok: true });
+      }
+      const unignore = /^\/api\/ignore\/([^/]+)$/.exec(pathname);
+      if (method === "DELETE" && unignore) {
+        await registry.setIgnored(decodeURIComponent(unignore[1]), false);
+        return json({ ok: true });
       }
 
       const unpin = /^\/api\/pin\/([^/]+)$/.exec(pathname);

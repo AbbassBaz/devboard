@@ -45,8 +45,15 @@ describe("mergeServices", () => {
     const row = out.find((s) => s.id === "core-api-3003")!;
     expect(row).toEqual({
       id: "core-api-3003", name: "core-api", kind: "dev", status: "stopped", ports: [3003],
-      cwd: pinnedApi.cwd, command: pinnedApi.command, pinned: true, hasLog: true,
+      cwd: pinnedApi.cwd, command: pinnedApi.command, pinned: true, hasLog: true, hidden: false,
     });
+  });
+
+  test("ignored ids are flagged hidden, running or stopped", () => {
+    const rows = mergeServices([docs, cc], [pinnedApi], () => false, new Set(["oncore-docs-3010", "core-api-3003"]));
+    expect(rows.find((s) => s.rootPid === 64672)!.hidden).toBe(true);
+    expect(rows.find((s) => s.id === "core-api-3003")!.hidden).toBe(true);
+    expect(rows.find((s) => s.rootPid === 683)!.hidden).toBe(false);
   });
 
   test("system services pass through", () => {

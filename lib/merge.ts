@@ -14,6 +14,7 @@ export function mergeServices(
   running: RunningService[],
   pinned: Pinned[],
   hasLog: (id: string) => boolean,
+  ignored: ReadonlySet<string> = new Set(),
 ): Service[] {
   const matched = new Set<string>();
   const rows: Service[] = running.map((r) => {
@@ -35,6 +36,7 @@ export function mergeServices(
       memMb: r.memMb,
       pinned: !!p,
       hasLog: hasLog(id),
+      hidden: ignored.has(id),
     };
   });
   for (const p of pinned) {
@@ -49,6 +51,7 @@ export function mergeServices(
       command: p.command,
       pinned: true,
       hasLog: hasLog(p.id),
+      hidden: ignored.has(p.id),
     });
   }
   return rows;

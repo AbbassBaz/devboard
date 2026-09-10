@@ -75,6 +75,15 @@ describe("Registry", () => {
     expect(await registry.load()).toEqual([]);
   });
 
+  test("ignored ids round-trip and can be removed again", async () => {
+    expect(await registry.loadIgnored()).toEqual(new Set());
+    await registry.setIgnored("sadie-17039", true);
+    await registry.setIgnored("abbassbaz-37777", true);
+    expect([...(await registry.loadIgnored())]).toEqual(["abbassbaz-37777", "sadie-17039"]);
+    await registry.setIgnored("sadie-17039", false);
+    expect([...(await registry.loadIgnored())]).toEqual(["abbassbaz-37777"]);
+  });
+
   test("save writes pretty JSON with a trailing newline", async () => {
     await registry.save([{ id: "a-1", name: "a", cwd: "/tmp", command: "true", port: 1 }]);
     const text = await Bun.file(registry.path).text();

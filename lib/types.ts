@@ -43,4 +43,5 @@ export type Service = {
   memMb?: number;
   pinned: boolean;
   hasLog: boolean;
+  hidden: boolean;
 };

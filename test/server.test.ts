@@ -60,6 +60,19 @@ describe("GET /api/services", () => {
   });
 });
 
+describe("POST /api/ignore and DELETE /api/ignore/:id", () => {
+  test("hides a service by id and shows it again", async () => {
+    running = [docs];
+    expect((await call("POST", "/api/ignore", { id: "oncore-docs-3010" })).status).toBe(200);
+    let list = (await (await call("GET", "/api/services")).json()).services;
+    expect(list.find((s: Service) => s.id === "oncore-docs-3010")).toMatchObject({ hidden: true, status: "running" });
+    expect((await call("DELETE", "/api/ignore/oncore-docs-3010")).status).toBe(200);
+    list = (await (await call("GET", "/api/services")).json()).services;
+    expect(list.find((s: Service) => s.id === "oncore-docs-3010")!.hidden).toBe(false);
+    expect((await call("POST", "/api/ignore", {})).status).toBe(400);
+  });
+});
+
 describe("POST /api/pinned (hand-entered server)", () => {
   test("creates a stopped pinned service, expanding ~ in the folder", async () => {
     running = [];
