@@ -25,7 +25,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-15 | One server scan loop with a cached snapshot | done | 3s loop writes the snapshot; GET reuses it for `cacheMs`. Mutations invalidate. Tests keep `cacheMs` 0. |
 | F-16 | Show readiness on the page | done | Unhealthy running rows use the error-token dot, `health <status> · <ms>ms` in meta, and `N unhealthy` in the top bar. Browser-checked on a 500 health URL. |
 | F-17 | Mask secret-looking env values and gate `/api/env` | done | `maskEnv` on `/api/env` and `/api/services`. Unrelated pid is 404. `?reveal=1` and `GET /api/pinned/:id` return real values. Home 0700, files 0600. Start still gets the real overrides. |
-| F-18 | Validate hand-edited registry JSON and serialize writes | todo | Tier 2 — waiting |
+| F-18 | Validate hand-edited registry JSON and serialize writes | done | Skip bad entries and log one line. GET leaves a `{ "nope": true }` file untouched. Per-path write queue + unique tmp names; 20 concurrent adds keep all 20. |
 | F-19 | Reconcile AGENTS.md with the new direction and add CONTRIBUTING.md | done | Loopback-only wording; design.md is the current spec and can be amended in-PR. CONTRIBUTING.md covers the four gotchas. |
 | F-20 | Refuse to retire a worktree while a server runs in it | todo | Tier 2 — waiting |
 | F-21 | Give saved services an identity that survives name collisions | todo | Tier 3 — waiting |

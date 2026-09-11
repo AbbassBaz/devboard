@@ -680,4 +680,21 @@ describe("tracked process status", () => {
     expect(readdirSync(quietHome).filter((n) => !listed.has(n))).toEqual([]);
     rmSync(quietHome, { recursive: true, force: true });
   });
+
+  test("GET /api/services stays 200 when services.json is not an array", async () => {
+    const badHome = realpathSync(mkdtempSync(join(tmpdir(), "devboard-badjson-")));
+    writeFileSync(join(badHome, "services.json"), '{ "nope": true }\n');
+    const badHandle = createHandler({
+      discover: async () => [docs],
+      registry: new Registry(badHome),
+      control: new Control(badHome),
+      allowedHosts: ["devboard.test"],
+    });
+    const res = await badHandle(new Request("http://devboard.test/api/services"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.services.some((s: Service) => s.rootPid === 64672)).toBe(true);
+    expect(await Bun.file(join(badHome, "services.json")).text()).toBe('{ "nope": true }\n');
+    rmSync(badHome, { recursive: true, force: true });
+  });
 });
