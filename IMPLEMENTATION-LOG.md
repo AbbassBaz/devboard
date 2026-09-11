@@ -14,7 +14,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-04 | Track the processes devboard spawns so status is real | todo | Tier 2 — waiting |
 | F-05 | Contain log ids to the log directory | done | `isValidLogId` + resolved-path check. GET/DELETE `..%2F..%2Foutside` is 400; fixture unchanged. |
 | F-06 | Make the tray build optional in `install` | done | No-swift PATH prints the skip line and exits 0 after the symlink. `tray:build` script added. |
-| F-07 | CI on a macOS runner, with a smoke script that cannot touch a real board | todo | |
+| F-07 | CI on a macOS runner, with a smoke script that cannot touch a real board | done | macos-14 workflow + `.bun-version` 1.2.18. Locally, busy :4242 makes smoke abort before any API call; sentinel survived. |
 | F-08 | Rewrite the README for a stranger | todo | |
 | F-09 | Remove or scrub private names in `docs/superpowers/` | todo | Human: delete the folder |
 | F-10 | Rotate logs while a server runs, not only at start | todo | Tier 2 — waiting |

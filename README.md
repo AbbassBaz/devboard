@@ -1,5 +1,7 @@
 # devboard
 
+[![ci](https://github.com/AbbassBaz/devboard/actions/workflows/ci.yml/badge.svg)](https://github.com/AbbassBaz/devboard/actions/workflows/ci.yml)
+
 A localhost dashboard for the dev servers on this Mac. One screen: every listening
 process on the left, grouped by project, and the selected server's log on the right.
 Kill, start, restart, pin, group, and read logs without leaving the page or the terminal.

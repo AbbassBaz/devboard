@@ -85,7 +85,7 @@ For UI changes, start the board with `DEVBOARD_TRAY=0 bun run start`, open `http
 - Commit `tray/.build/` or `tray/Dist/`. Both are ignored.
 - Touch `docs/superpowers/`. It is the historical spec.
 - Run `devboard install` or `bun run setup` unless asked. They write to `~/.local/bin` and `~/Applications`.
-- Add tool-specific instruction files (`.cursor/`, `.claude/`, `.github/copilot-*`, and so on). Everything goes here or in `agents/`.
+- Add tool-specific instruction files (`.cursor/`, `.claude/`, `.github/copilot-*`, and so on). Everything goes here or in `agents/`. A GitHub Actions workflow at `.github/workflows/ci.yml` is allowed.
 
 ## Gotchas that have already cost time
 
