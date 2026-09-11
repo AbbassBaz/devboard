@@ -1,0 +1,141 @@
+# Graphite workspace
+
+Standing UI rules for `public/index.html`, `public/app.js`, and `public/app.css`. Colors, type, spacing, radii, and states are final — match them, do not restyle. Vanilla JS + Bun, no frameworks. No server changes for UI work; wire actions to the existing `/api/*` endpoints.
+
+## Principles
+
+- Two jobs on one screen at all times: **see what's running** (sidebar) and **read its logs** (right pane).
+- One primary action per zone. Everything else lives in a `···` menu.
+- Error and follow controls appear only when relevant.
+- Keyboard-first. Keys are ignored while an input is focused (`Esc` blurs).
+- Dense, IDE-like, dark. No grain, gradients, display type, or card-grid chrome.
+- Secondary surfaces (worktrees, projects, presets, attention, env, full edit) open as overlay sheets from the top-bar or log `···` menu — never as extra top-level views.
+
+## Shell
+
+```
+body:  height 100vh; display:grid; grid-template-rows: 44px 1fr 28px; background #16181c
+work:  display:grid; grid-template-columns: minmax(300px, 380px) 1fr
+```
+
+Fixed two-column workspace (sidebar min 300px). Header rows wrap rather than clip. Everything uses `font-variant-numeric: tabular-nums`.
+
+## Tokens
+
+### Color
+
+| Role | Hex | Use |
+|---|---|---|
+| bg | `#16181c` | page, log pane, inputs |
+| surface | `#191c21` | sidebar, log filter field |
+| bar | `#1c1f24` | top bar, status bar, add form, sheets |
+| menu | `#1f232a` | menus, log-line hover |
+| hover | `#23272e` | row hover, text-button hover |
+| sel | `#242932` | selected row |
+| border | `#2a2e35` | major edges |
+| border-sm | `#22262c` | log meta / toolbar |
+| border-btn | `#2f343c` | buttons, menus |
+| focus | `#4a5160` | input focus, control hover, line numbers |
+| fg | `#d7dae0` | primary text, count numbers, key glyphs |
+| secondary | `#aeb4bf` | group labels, outlined button text |
+| dim | `#8b919c` | meta, stopped names, empty copy, hints |
+| timestamp | `#5d636e` | log times, menu key hints |
+| accent | `#8ab4f8` | brand mark, links, add/primary sheet, caret, copy toast |
+| ink | `#0f1420` | text on accent / green fills |
+| running | `#4fb477` | on-dot, on-switch, Start fill |
+| busy | `#d4a72c` | starting/stopping |
+| error | `#e5534b` | counts, chips, kill hover, Remove |
+| error-fg | `#f28b82` | error log text |
+| warn | `#e2b96a` | warning log text |
+| ok | `#8fd3a6` | success log text |
+| off | `#3a3e46` | stopped dot, switch border |
+
+Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
+
+### Type
+
+- UI: IBM Plex Sans 400/500/600 — 14 pane title, 13 base, 12 buttons, 11 labels. Line-height 1.45.
+- Data: JetBrains Mono 400/500/600 — 12 data and log, 11 meta and hints. Log line-height 1.6.
+- Ports, pids, metrics, paths, log text, clock, and key hints are always mono.
+
+### Space, radius, height, motion
+
+- Spacing scale: 4 / 6 / 8 / 10 / 12 / 14 / 16 / 20.
+- Radii: 3 log line, 4 chips and menu items, 5 buttons and inputs, 6 rows, 7 menus, 8 switch. Brand mark radius 2.
+- Heights: top/log-A 44, status 28, toolbar 38, controls 26, inputs 28, switch 16×30, `···` 28×26.
+- Transitions: hover bg `.12s`; switch `.2s`; CPU bars `.8s cubic-bezier(.2,.8,.2,1)`.
+- Shadows: menu `0 12px 32px rgba(0,0,0,.5)`; running dot `0 0 0 3px rgba(79,180,119,.15)`.
+- Respect `prefers-reduced-motion`.
+
+## Zones
+
+### Top bar — 44px, `#1c1f24`, border-bottom `#2a2e35`, padding `0 16px`, gap 20
+
+- Brand: 8×8 `#8ab4f8` square + “devboard” 600.
+- Counts, mono 12 dim: `N up` (number `#d7dae0`); `N down` (whole span `#d7dae0` if >0 else dim); `N err` (`#e5534b` if >0 else dim). Errors come from cached log lines.
+- Right: clock `HH:MM:SS` mono 12 dim · `+ Add` · `···`. Menu: Start all · Stop all · ─ · Worktrees… · New project… · Presets… · Attention….
+
+### Sidebar — `#191c21`, border-right `#2a2e35`
+
+- Filter 28px, radius 5, bg `#16181c`, placeholder “Filter servers  /”. Name or port. `/` focuses it.
+- `+ Add` opens an inline form under the filter (bg `#1c1f24`): name, folder, command \| port (`1fr 80px`), Cancel / **Add** (accent fill, ink, 600). Folder blur → `GET /api/suggest`. Submit → `POST /api/pinned`. Extra fields (health, env, restart-on-crash) stay on the Edit sheet.
+- Group header (`10px 12px 4px`, 11px): uppercase 600 `.06em` `#aeb4bf` (project name, or “Other”) · mono `running/total` dim · project text buttons `start` / `stop` (hover `#23272e`, green / red) → `/api/projects/:id/start|stop`.
+- Row: `10px 1fr auto auto`, gap 10, margin `0 6px`, padding `7px 8px 7px 10px`, radius 6. Selected `#242932`, hover `#23272e`. Click selects.
+  - Dot 8px: running `#4fb477` + ring; busy `#d4a72c` pulse `.8s`; stopped `#3a3e46`.
+  - Name 500 (`#8b919c` if stopped) + port link `:3003` → `http://localhost:PORT`.
+  - Meta mono 11 dim: running `pid · cpu% · MB · up`; busy `starting… waiting for :PORT`; stopped `stopped · saved` / `stopped`.
+  - Error pill only if >0: 600 11 `#e5534b` on `rgba(229,83,75,.12)`.
+  - CPU bar 40×3, track `#2a2e35`, fill accent (error above 75% of scale). Width `cpu/6*100%`, capped.
+  - Switch 30×16: on green / knob `#0f1a14` +14px; busy amber wash, `cursor: progress`; off `#23272e` / `#3a3e46` / dim. Same start / pin-then-kill as today. `stopPropagation` — do not change selection.
+- System `<details>` collapsed: hollow dot, name + ports, ellipsized command, `kill` → confirm → `POST /api/kill`. Hidden cards stay in a collapsed Hidden group.
+
+### Log pane — `#16181c`
+
+**A** (min 44, `8px 16px`, wrap, border `#2a2e35`): dot · name 600 14 · `localhost:PORT ↗` · state dim. Primary: **Start** green fill when stopped; **Restart** outlined when running; `starting…` disabled when busy. Then `···` (200px menu): Open in browser (`o`) · Open in editor · Copy run command (`c`) · ─ · Show errors only / Show all · Follow / Stop following · Clear log · ─ · Pin (unpinned) · Edit… (pinned) · Env… · Add to / Remove from project · Hide · Remove (red, pinned).
+
+**B** (30px, mono 11 dim, border `#22262c`): click-to-copy `cwd` and `$ command` (glyph `#4a5160`, hover `#d7dae0`); `pid · cpu · MB · up` when running.
+
+**Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`): log filter (26px, flex 1, min 120). Error chip only if the log has errors — click cycles next error, ⇧click toggles errors-only (`1 error ↓` → `error 1/3 ↓` → `errors only · 3`). `↓ Resume follow` (accent outline) only when follow is off. Right: `N lines` or `k/N lines`, `title` = log path.
+
+**Body** (`10px 16px 20px`, mono 12 / 1.6, `#c3c8d1`):
+- Line: flex, gap 14, pad `0 8px`, margin `0 -8px`, radius 3, `cursor: copy`; hover `#1f232a`. Columns: ln 30px right `#4a5160` · time `#5d636e` · text.
+- Color by line text: error `/error|exit|SIGTERM|EADDRINUSE|failed/i` → `#f28b82` on `rgba(229,83,75,.1)`; warn `/warn|⚠|retry/i` → `#e2b96a`; markers `/^===|^\$ |^> /` → dim; success `/listening|Ready|Compiled|connected|ready/` → `#8fd3a6`.
+- Current error: `box-shadow: inset 2px 0 0 #e5534b`.
+- Blinking 7×14 accent caret at the tail while running (1s steps).
+- Empty (Plex, dim, max 520): stopped → “*name* is stopped…” + Start; unmanaged running → “Started outside devboard…”; filtered → “Nothing matches the current filter.”
+- Click a line copies its text. If lines have no timestamps, omit the time column — do not invent times.
+
+### Status bar — 28px, `#1c1f24`, border-top `#2a2e35`, mono 11 dim, `0 12px`
+
+`↑↓` select · `␣` on/off · `r` restart · `e` next err · `c` copy run cmd · `o` open · `/` filter. Keys `#d7dae0`. Right: `poll 3s · 127.0.0.1:4242`. Copy toast 1.6s here: `copied · <text>` accent / dim.
+
+### Overlay sheets
+
+Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for worktrees, project create/edit, presets, attention, env, and full server edit. Clicking the dimmed backdrop or `Esc` closes. Do not revive the old tabbed board.
+
+## Behaviour
+
+- Select by row click or `↑↓` / `j`/`k` through **visible** (filtered) rows. Changing selection resets the error cursor and, if follow is on, scrolls the log to the tail. Persist `sel` in `localStorage`.
+- `Space` toggles the selected server. `r` restarts if running. `e` next error. `c` copies `cd <cwd> && <command>`. `o` opens `http://localhost:<port>`.
+- Busy is optimistic: switch, dot, and primary go amber until `/api/services` agrees (or 15s). On start, append `=== devboard start · <cmd>` and `$ <cmd>` immediately.
+- Follow is on by default. Next-error turns it off. Resume follow turns it on and jumps to the tail. Scrolling away from the tail also turns it off.
+- Poll `/api/services` every 3s; selected log `/api/logs/:id?lines=4000` every 2s.
+- Copy via `navigator.clipboard.writeText`, then the status-bar toast.
+- One open menu. Outside click or item click closes it.
+- Destructive actions (stop all, project stop, kill system, remove, clear log) still confirm.
+
+## State
+
+`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logFilter`, `errOnly`, `follow`, `errCursor`, `menu` (`null|"top"|"log"`), `addOpen`, `toast`, `logs{id: lines[]}`.
+
+## Endpoints
+
+`/api/services`, `/api/logs/:id`, `/api/start`, `/api/restart`, `/api/kill`, `/api/pin`, `/api/pinned`, `/api/projects/:id/start|stop|members`, `/api/suggest`, `/api/open`, plus existing worktrees / presets / attention / env / ignore routes for the sheet features.
+
+## Do not
+
+- Introduce a framework, a new typeface, or a new palette.
+- Put Worktrees / Attention / Presets back in a top-level tab bar.
+- Show error chips, resume-follow, or empty-state buttons when they do not apply.
+- Fabricate log timestamps.
+- Copy prototype runtimes or mock HTML into `public/`.
