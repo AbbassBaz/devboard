@@ -90,15 +90,18 @@ function paintMenus() {
 }
 
 function overlayOpen() { return !$("#overlay").hidden; }
-function closeSheet() {
+function hideSheets() {
   $("#overlay").hidden = true;
   $$("#overlay .sheet").forEach((el) => { el.hidden = true; });
+}
+function closeSheet() {
+  hideSheets();
   editingId = null;
   editingProjectId = null;
 }
 function openSheet(id) {
   closeMenu();
-  closeSheet();
+  hideSheets();
   $("#overlay").hidden = false;
   $(`#${id}`).hidden = false;
 }
