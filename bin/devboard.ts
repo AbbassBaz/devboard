@@ -76,10 +76,21 @@ async function up() {
   console.log(`board ${base}`);
 }
 
+async function swiftReady(): Promise<boolean> {
+  if (!Bun.which("swift")) return false;
+  const check = Bun.spawn(["swift", "--version"], { stdout: "ignore", stderr: "ignore" });
+  return (await check.exited) === 0;
+}
+
 async function install() {
   mkdirSync(join(homedir(), ".local", "bin"), { recursive: true });
   try { unlinkSync(BIN); } catch {}
   symlinkSync(join(ROOT, "bin/devboard.ts"), BIN);
+  if (!(await swiftReady())) {
+    console.log("menu bar app skipped: Swift 6 toolchain not found; install Xcode 16 or run bun run tray:build later");
+    console.log(`command: ${BIN}`);
+    return;
+  }
   const build = Bun.spawn(["/bin/zsh", join(ROOT, "scripts/build-tray.sh")], {
     cwd: ROOT,
     stdout: "inherit",

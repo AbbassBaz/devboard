@@ -12,7 +12,8 @@
     "dev": "bun --watch server.ts",
     "test": "bun test",
     "devboard": "bun run bin/devboard.ts",
-    "setup": "bun run bin/devboard.ts install"
+    "setup": "bun run bin/devboard.ts install",
+    "tray:build": "/bin/zsh scripts/build-tray.sh"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2"

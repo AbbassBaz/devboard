@@ -10,7 +10,7 @@ Kill, start, restart, pin, group, and read logs without leaving the page or the 
     bun run start          # http://127.0.0.1:4242  (opens the menu bar extra too)
     bun run dev            # same, restarts on file changes
     bun test
-    bun run bin/devboard.ts install   # once: put `devboard` on PATH, install the menu bar app
+    bun run bin/devboard.ts install   # once: put `devboard` on PATH; menu bar app needs Swift 6
 
 After install, any terminal:
 
@@ -22,7 +22,8 @@ After install, any terminal:
     devboard tray          # show the menu bar extra
 
 `devboard install` drops a symlink in `~/.local/bin`, so the command works like `git`
-or `ls`. Without installing, `bun run devboard -- <cmd>` does the same.
+or `ls`. Without installing, `bun run devboard -- <cmd>` does the same. The menu bar
+app is skipped when `swift` is missing; `bun run tray:build` builds it later.
 
 Start the board from your normal zsh so that services launched from the page inherit
 the same PATH (fnm's node, pnpm, bun).
