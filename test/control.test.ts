@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Control, isAlive, killTree } from "../lib/control";
+import { Control, isAlive, isValidLogId, killTree } from "../lib/control";
 import { scanProcesses } from "../lib/discover";
 
 const spawned: number[] = [];
@@ -131,5 +131,14 @@ describe("Control", () => {
     expect(tail.lines[0]).toContain("cleared");
     expect(cleared.size).toBe(tail.size);
     await expect(control.clearLog("missing")).rejects.toThrow("no log");
+  });
+
+  test("logPath rejects ids that could leave the log directory", () => {
+    expect(isValidLogId("echo-1")).toBe(true);
+    expect(isValidLogId("devboard-3999")).toBe(true);
+    expect(isValidLogId("../outside")).toBe(false);
+    expect(isValidLogId("..")).toBe(false);
+    expect(() => control.logPath("../outside")).toThrow("invalid log id");
+    expect(() => control.logPath("../../outside")).toThrow("invalid log id");
   });
 });

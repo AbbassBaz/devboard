@@ -3,7 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { collectAlerts } from "./lib/attention";
-import { Control, killTree } from "./lib/control";
+import { Control, isValidLogId, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
 import { parseEnvText, readProcessEnv } from "./lib/env";
 import { applyReadiness, firstFreePort } from "./lib/health";
@@ -534,6 +534,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       const logs = /^\/api\/logs\/([^/]+)$/.exec(pathname);
       if (method === "GET" && logs) {
         const id = decodeURIComponent(logs[1]);
+        if (!isValidLogId(id)) return fail("invalid log id", 400);
         if (!control.hasLog(id)) return fail("no log for that id", 404);
         const requested = Number(url.searchParams.get("lines") ?? 200);
         const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 5000) : 200;
@@ -541,6 +542,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       }
       if (method === "DELETE" && logs) {
         const id = decodeURIComponent(logs[1]);
+        if (!isValidLogId(id)) return fail("invalid log id", 400);
         if (!control.hasLog(id)) return fail("no log for that id", 404);
         return json(await control.clearLog(id));
       }

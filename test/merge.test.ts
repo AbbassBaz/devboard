@@ -25,6 +25,7 @@ describe("matchPinned", () => {
 describe("logIdFor", () => {
   test("derives the same id a pin would get", () => {
     expect(logIdFor(docs)).toBe("docs-site-3010");
+    expect(logIdFor({ ...docs, name: "bun", command: "bun -e 'Bun.serve({port:3010})'" })).toBe("bun-3010");
   });
 });
 

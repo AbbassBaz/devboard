@@ -210,6 +210,16 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     expect((await (await call("GET", "/api/logs/echo-1")).json()).lines.some((l: string) => l.includes("cleared"))).toBe(true);
     expect((await call("DELETE", "/api/logs/nothing-here")).status).toBe(404);
   });
+
+  test("log ids cannot escape the log directory", async () => {
+    const outside = join(home, "..", "outside.log");
+    writeFileSync(outside, "leave me alone\n");
+    const get = await call("GET", "/api/logs/..%2F..%2Foutside");
+    const del = await call("DELETE", "/api/logs/..%2F..%2Foutside");
+    expect(get.status).toBe(400);
+    expect(del.status).toBe(400);
+    expect(await Bun.file(outside).text()).toBe("leave me alone\n");
+  });
 });
 
 describe("GET /api/worktrees and prune/remove", () => {

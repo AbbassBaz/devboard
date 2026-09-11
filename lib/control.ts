@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, fstatSync, openSync, writeSync } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { mergeEnv } from "./env";
 import { DEVBOARD_HOME } from "./registry";
 import type { StartSpec } from "./types";
 
 export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 export const LOG_KEEP_BYTES = 2 * 1024 * 1024;
+
+export function isValidLogId(id: string): boolean {
+  return /^[a-z0-9-]+$/.test(id);
+}
 
 export function isAlive(pid: number): boolean {
   try {
@@ -51,7 +55,11 @@ export class Control {
   }
 
   logPath(id: string): string {
-    return join(this.logDir, `${id}.log`);
+    if (!isValidLogId(id)) throw new Error("invalid log id");
+    const dir = resolve(this.logDir);
+    const path = resolve(dir, `${id}.log`);
+    if (!path.startsWith(dir + "/")) throw new Error("invalid log id");
+    return path;
   }
 
   hasLog(id: string): boolean {
