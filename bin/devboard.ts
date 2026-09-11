@@ -158,10 +158,15 @@ try {
       catch (e) { console.error(`${s.id}: ${e instanceof Error ? e.message : e}`); }
     }
   } else if (cmd === "stop-all") {
-    const data = await api("GET", "/api/services") as { services: { id: string; kind: string; status: string; rootPid?: number }[] };
+    const data = await api("GET", "/api/services") as { services: { id: string; kind: string; status: string; rootPid?: number; pinned?: boolean }[] };
     for (const s of data.services.filter((x) => x.kind === "dev" && x.status === "running" && x.rootPid)) {
-      await api("POST", "/api/kill", { rootPid: s.rootPid });
-      console.log(`stopped ${s.id}`);
+      try {
+        if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid });
+        await api("POST", "/api/kill", { rootPid: s.rootPid });
+        console.log(`stopped ${s.id}`);
+      } catch (e) {
+        console.error(`${s.id}: ${e instanceof Error ? e.message : e}`);
+      }
     }
   } else {
     usage();
