@@ -11,6 +11,22 @@ Standing UI rules for `public/index.html`, `public/app.js`, and `public/app.css`
 - Dense, IDE-like, dark. No grain, gradients, display type, or card-grid chrome.
 - Secondary surfaces (worktrees, projects, presets, attention, env, full edit) open as overlay sheets from the top-bar or log `···` menu — never as extra top-level views.
 
+## The page
+
+Dark, dense, keyboard-first. Three fixed rows: a 44px top bar, the workspace, and a 28px status bar with the key map. The workspace is a sidebar and a log pane.
+
+**Top bar.** Counts of servers up, down, and with errors in their log. A clock. `+ Add` opens the add form. `···` holds Start all, Stop all, and the sheets: Worktrees, New project, Presets, Attention.
+
+**Sidebar.** One row per dev server, grouped under its project (or "Other"). Each row has a state dot, the name, a port link, `pid · cpu · MB · uptime` when running, an error count when the log has errors, a CPU bar, and a switch. The switch is the state: green and on means running, grey and off means stopped, amber means starting or stopping. Switching off kills the process tree; an unpinned server is pinned first so it stays on the board and can be switched back on. Switching on runs the saved command. Each group header has its own `start` and `stop` for the whole project. The filter box at the top matches name or port; `/` focuses it. System processes (Postgres, Redis, macOS services) sit in a collapsed **System** list with only a Kill action. Hidden servers sit in a collapsed **Hidden** list with a Show action.
+
+**Log pane.** The selected server: dot, name, `localhost:PORT ↗`, and state. One primary button: **Start** when stopped, **Restart** when running. `···` holds Open in browser, Open in editor, Copy run command, Show errors only, Follow, Clear log, then Pin or Edit, Env, Add to or Remove from a project, Hide, and Remove. Under that, click-to-copy `cwd` and `$ command`. The toolbar has a text filter, an error chip that appears only when the log has errors (click jumps to the next one, shift-click shows errors only), and a `↓ Resume follow` button that appears only when you have scrolled away from the tail. Lines are coloured by content: errors red, warnings amber, ready and listening green. Click a line to copy it. Timestamps show only when the log has them.
+
+**Keys.** `↑↓` or `j`/`k` select. `space` toggles the selected server. `r` restarts. `e` jumps to the next error. `c` copies `cd <cwd> && <command>`. `o` opens the port in the browser. `/` focuses the filter. `Esc` closes a menu or sheet. Keys are ignored while an input has focus.
+
+**Sheets.** Worktrees, projects, presets, attention, env, and the full server edit open as overlays from the `···` menus. `Esc` or a click on the backdrop closes them. Destructive actions (stop all, stop project, kill system, remove, clear log) ask first.
+
+The token, layout, and state rules below are the rest of the spec.
+
 ## Shell
 
 ```
