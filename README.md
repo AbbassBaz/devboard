@@ -163,6 +163,10 @@ first.
   request to `/` will not see board traffic unless you ask for it.
 - Binds to 127.0.0.1 only. Do not change that: the API kills processes and
   runs saved shell commands. There is no remote or multi-machine mode.
+  Requests whose Host or Origin is not loopback (or `localhost` / `::1`),
+  or whose `Sec-Fetch-Site` is present and not `same-origin` or `none`,
+  get 403. Non-GET requests must be `application/json` (415 otherwise).
+  There are no CORS headers.
 
 ## Smoke checklist
 

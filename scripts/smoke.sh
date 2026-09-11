@@ -8,6 +8,7 @@ rm -rf "$DEVBOARD_HOME"
 ok=1
 api() {
   if [ $# -ge 3 ]; then curl -s -X "$1" "http://127.0.0.1:4242$2" -H 'content-type: application/json' -d "$3"
+  elif [ "$1" != GET ]; then curl -s -X "$1" "http://127.0.0.1:4242$2" -H 'content-type: application/json'
   else curl -s -X "$1" "http://127.0.0.1:4242$2"; fi
 }
 row() { api GET /api/services | bun -e 'const b = await new Response(Bun.stdin).json(); const s = b.services.find(s => s.ports.includes(3999)); console.log("    " + (s ? JSON.stringify({status:s.status,name:s.name,kind:s.kind,rootPid:s.rootPid,pids:s.pids,pinned:s.pinned,hasLog:s.hasLog,id:s.id}) : "no row for 3999"));'; }

@@ -15,12 +15,27 @@ import { suggestCommands } from "./lib/suggest";
 import type { Pinned, ProjectLink, RunningService, StartSpec, WorktreeInfo } from "./lib/types";
 import { createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
+
 export type Deps = {
   discover: () => Promise<RunningService[]>;
   registry: Registry;
   control: Control;
   crashes?: CrashWatch;
+  allowedHosts?: string[];
 };
+
+function hostnameOf(value: string): string | null {
+  try {
+    return new URL(value.includes("://") ? value : `http://${value}`).hostname;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedHost(host: string, extra: string[]): boolean {
+  return LOOPBACK_HOSTS.includes(host) || extra.includes(host);
+}
 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const fail = (message: string, status = 400) => json({ error: message }, status);
@@ -100,6 +115,24 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   };
 
   return async function handle(req: Request): Promise<Response> {
+    const extra = deps.allowedHosts ?? [];
+    const urlHost = new URL(req.url).hostname;
+    if (!isAllowedHost(urlHost, extra)) return fail("forbidden", 403);
+
+    const origin = req.headers.get("origin");
+    if (origin !== null) {
+      const originHost = origin === "null" ? null : hostnameOf(origin);
+      if (!originHost || !isAllowedHost(originHost, extra)) return fail("forbidden", 403);
+    }
+
+    if (req.method !== "GET") {
+      const ct = (req.headers.get("content-type") ?? "").toLowerCase();
+      if (!ct.startsWith("application/json")) return fail("content-type must be application/json", 415);
+    }
+
+    const site = req.headers.get("sec-fetch-site");
+    if (site !== null && site !== "same-origin" && site !== "none") return fail("forbidden", 403);
+
     const res = await route(req);
     const isMutation = req.method !== "GET";
     if (isMutation || res.status >= 400) {

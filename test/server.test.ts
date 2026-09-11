@@ -12,7 +12,7 @@ const home = mkdtempSync(join(tmpdir(), "devboard-"));
 const registry = new Registry(home);
 const control = new Control(home);
 let running: RunningService[] = [];
-const handle = createHandler({ discover: async () => running, registry, control });
+const handle = createHandler({ discover: async () => running, registry, control, allowedHosts: ["devboard.test"] });
 
 const docs: RunningService = {
   rootPid: 64672, pids: [64672, 64728, 64734], ports: [3010],
@@ -30,8 +30,8 @@ afterAll(() => {
 const call = (method: string, path: string, body?: unknown) =>
   handle(new Request(`http://devboard.test${path}`, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: method === "GET" ? undefined : { "content-type": "application/json" },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   }));
 
 describe("GET /", () => {
@@ -405,5 +405,51 @@ describe("healthUrl, ports, presets and attention", () => {
     expect(res.status).toBe(200);
     const { alerts } = await res.json();
     expect(alerts.some((a: { kind: string }) => a.kind === "port-conflict")).toBe(true);
+  });
+});
+
+describe("request gate", () => {
+  test("Host: evil.example gets 403", async () => {
+    const res = await handle(new Request("http://evil.example/api/services"));
+    expect(res.status).toBe(403);
+  });
+
+  test("POST with content-type: text/plain gets 415", async () => {
+    const res = await handle(new Request("http://devboard.test/api/ignore", {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ id: "x" }),
+    }));
+    expect(res.status).toBe(415);
+  });
+
+  test("POST with Origin: http://evil.example gets 403", async () => {
+    const res = await handle(new Request("http://devboard.test/api/ignore", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://evil.example" },
+      body: JSON.stringify({ id: "x" }),
+    }));
+    expect(res.status).toBe(403);
+  });
+
+  test("Origin: null gets 403", async () => {
+    const res = await handle(new Request("http://devboard.test/api/services", {
+      headers: { origin: "null" },
+    }));
+    expect(res.status).toBe(403);
+  });
+
+  test("POST with Origin: http://127.0.0.1:4242 and JSON passes", async () => {
+    const res = await handle(new Request("http://devboard.test/api/ignore", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://127.0.0.1:4242" },
+      body: JSON.stringify({ id: "gate-ok" }),
+    }));
+    expect(res.status).toBe(200);
+  });
+
+  test("POST with no Origin and JSON passes", async () => {
+    const res = await call("POST", "/api/ignore", { id: "gate-cli" });
+    expect(res.status).toBe(200);
   });
 });

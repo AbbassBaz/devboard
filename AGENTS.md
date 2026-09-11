@@ -57,7 +57,7 @@ DEVBOARD_TRAY=0 bun run start # server only, no menu bar extra
 
 **Bun and vanilla only.** No frameworks, no bundler, no new runtime deps without a written reason. `@types/bun` is the only dev dependency.
 
-**Bind to 127.0.0.1.** The API kills processes and runs saved shell commands. Never widen the host, add CORS, or accept a remote URL for the board.
+**Bind to 127.0.0.1.** The API kills processes and runs saved shell commands. Never widen the host, add CORS, or accept a remote URL for the board. `handle` rejects non-loopback Host/Origin (403), cross-site `Sec-Fetch-Site` (403), and non-JSON mutations (415). Tests may pass `allowedHosts` on `Deps`.
 
 **UI follows `design.md`.** Match its tokens, shell, keyboard map, and menus exactly. The scoped rule for this is `agents/graphite-ui.md`; apply it whenever a change touches `public/` or `design.md`. If a token or rule in `design.md` looks wrong, say so and stop. Do not edit `design.md` to match a UI change, and do not change the server to make a UI change easier.
 
