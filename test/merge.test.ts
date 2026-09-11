@@ -46,6 +46,7 @@ describe("mergeServices", () => {
     expect(row).toEqual({
       id: "core-api-3003", name: "core-api", kind: "dev", status: "stopped", ports: [3003],
       cwd: pinnedApi.cwd, command: pinnedApi.command, pinned: true, hasLog: true, hidden: false,
+      readiness: "stopped",
     });
   });
 

@@ -37,6 +37,8 @@ export function mergeServices(
       pinned: !!p,
       hasLog: hasLog(id),
       hidden: ignored.has(id),
+      readiness: "ready",
+      ...(p?.healthUrl ? { healthUrl: p.healthUrl } : {}),
     };
   });
   for (const p of pinned) {
@@ -52,6 +54,8 @@ export function mergeServices(
       pinned: true,
       hasLog: hasLog(p.id),
       hidden: ignored.has(p.id),
+      readiness: "stopped",
+      ...(p.healthUrl ? { healthUrl: p.healthUrl } : {}),
     });
   }
   return rows;

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Control, isAlive } from "../lib/control";
@@ -43,6 +43,8 @@ describe("GET /", () => {
     expect(html).toContain("<title>devboard</title>");
     expect(html).toContain('id="dev"');
     expect(html).toContain("/api/services");
+    expect(html).toContain('id="worktreesBtn"');
+    expect(html).toContain('id="projectBtn"');
   });
 });
 
@@ -187,5 +189,132 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
   test("logs 404 for an unknown id and the unknown route 404s", async () => {
     expect((await call("GET", "/api/logs/nothing-here")).status).toBe(404);
     expect((await call("GET", "/api/whatever")).status).toBe(404);
+  });
+
+  test("DELETE /api/logs/:id clears a captured log", async () => {
+    const cleared = await call("DELETE", "/api/logs/echo-1");
+    expect(cleared.status).toBe(200);
+    expect((await (await call("GET", "/api/logs/echo-1")).json()).lines.some((l: string) => l.includes("cleared"))).toBe(true);
+    expect((await call("DELETE", "/api/logs/nothing-here")).status).toBe(404);
+  });
+});
+
+describe("GET /api/worktrees and prune/remove", () => {
+  test("scans a folder, prunes a deleted worktree, and removes an orphan", async () => {
+    const root = mkdtempSync(join(tmpdir(), "devboard-wt-api-"));
+    const repo = join(root, "app");
+    const linked = join(root, "app-agent");
+    const orphan = join(root, "orphan");
+    const git = async (cwd: string, args: string[]) => {
+      const proc = Bun.spawn(["git", "-c", "user.name=devboard", "-c", "user.email=devboard@test", ...args], {
+        cwd, stdout: "ignore", stderr: "pipe",
+      });
+      const err = await new Response(proc.stderr).text();
+      if ((await proc.exited) !== 0) throw new Error(err);
+    };
+    await git(root, ["init", "-q", "app"]);
+    await git(repo, ["commit", "--allow-empty", "-qm", "init"]);
+    await git(repo, ["worktree", "add", "-q", "-b", "agent", linked]);
+    rmSync(linked, { recursive: true, force: true });
+    mkdirSync(orphan);
+    writeFileSync(join(orphan, ".git"), "gitdir: /no/such/repo/.git/worktrees/orphan\n");
+
+    expect((await call("GET", "/api/worktrees")).status).toBe(400);
+    const scanned = await call("GET", `/api/worktrees?dir=${encodeURIComponent(root)}`);
+    expect(scanned.status).toBe(200);
+    const body = await scanned.json();
+    expect(body.stale.map((w: { reason: string }) => w.reason).sort()).toEqual(["orphaned", "prunable"]);
+
+    const pruned = await call("POST", "/api/worktrees/prune", { dir: root });
+    expect(pruned.status).toBe(200);
+    expect((await pruned.json()).pruned).toBe(1);
+
+    const removed = await call("POST", "/api/worktrees/remove", { path: orphan });
+    expect(removed.status).toBe(200);
+    const again = await (await call("GET", `/api/worktrees?dir=${encodeURIComponent(root)}`)).json();
+    expect(again.stale).toEqual([]);
+  });
+});
+
+describe("projects", () => {
+  test("create from a folder, start members together, and keep a service in one project", async () => {
+    running = [];
+    await registry.save([]);
+    await registry.saveProjects([]);
+    const app = join(home, "hub", "api");
+    mkdirSync(app, { recursive: true });
+    await registry.add({ name: "api", cwd: app, command: "echo project-start", port: 39993 });
+    await registry.add({ name: "other", cwd: home, command: "true", port: 39994 });
+
+    expect((await call("POST", "/api/projects", { folder: join(home, "hub") })).status).toBe(400);
+    const created = await call("POST", "/api/projects", { name: "Hub", folder: join(home, "hub"), addFromFolder: true });
+    expect(created.status).toBe(201);
+    expect((await created.json()).project.memberIds).toEqual(["api-39993"]);
+
+    const listed = await (await call("GET", "/api/services")).json();
+    expect(listed.projects[0]).toMatchObject({ id: "hub", on: 0, off: 1, ports: [39993] });
+
+    const started = await call("POST", "/api/projects/hub/start");
+    expect(started.status).toBe(200);
+    const startBody = await started.json();
+    expect(startBody.started[0].id).toBe("api-39993");
+    spawned.push(startBody.started[0].pid);
+
+    await registry.addProject({ name: "Other" });
+    expect((await call("POST", "/api/projects/other/members", { id: "api-39993" })).status).toBe(200);
+    expect((await registry.loadProjects()).find((p) => p.id === "hub")!.memberIds).toEqual([]);
+
+    expect((await call("DELETE", "/api/projects/hub")).status).toBe(200);
+    expect((await call("DELETE", "/api/projects/hub")).status).toBe(404);
+  });
+});
+
+describe("healthUrl, ports, presets and attention", () => {
+  test("POST /api/pinned keeps an optional health URL", async () => {
+    running = [];
+    const res = await call("POST", "/api/pinned", {
+      name: "Ready", cwd: home, command: "true", port: 39995, healthUrl: "http://127.0.0.1:39995/ready",
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).pinned.healthUrl).toBe("http://127.0.0.1:39995/ready");
+    await registry.unpin("ready-39995");
+  });
+
+  test("POST /api/ports/next skips used ports", async () => {
+    running = [{ ...docs, ports: [3000, 3001] }];
+    const res = await call("POST", "/api/ports/next");
+    expect(res.status).toBe(200);
+    expect((await res.json()).port).toBe(3002);
+  });
+
+  test("presets save and resume starts pinned members", async () => {
+    running = [];
+    await registry.save([{ id: "echo-2", name: "echo", cwd: home, command: "echo resumed", port: 39996 }]);
+    const created = await call("POST", "/api/presets", {
+      name: "Frontend only", serviceIds: ["echo-2"], urls: ["http://127.0.0.1:39996"],
+    });
+    expect(created.status).toBe(201);
+    const { preset } = await created.json();
+    expect(preset.id).toBe("frontend-only");
+    const listed = await (await call("GET", "/api/services")).json();
+    expect(listed.presets.map((p: { id: string }) => p.id)).toContain("frontend-only");
+    const resumed = await call("POST", "/api/presets/frontend-only/resume");
+    expect(resumed.status).toBe(200);
+    const body = await resumed.json();
+    expect(body.started[0].id).toBe("echo-2");
+    expect(body.urls).toEqual(["http://127.0.0.1:39996"]);
+    spawned.push(body.started[0].pid);
+    expect((await call("DELETE", "/api/presets/frontend-only")).status).toBe(200);
+  });
+
+  test("GET /api/attention reports a port conflict", async () => {
+    running = [
+      { ...docs, name: "web", ports: [3010], cwd: join(home, "a") },
+      { ...docs, rootPid: 9, pids: [9], name: "web-b", ports: [3010], cwd: join(home, "b") },
+    ];
+    const res = await call("GET", `/api/attention?dir=${encodeURIComponent(home)}`);
+    expect(res.status).toBe(200);
+    const { alerts } = await res.json();
+    expect(alerts.some((a: { kind: string }) => a.kind === "port-conflict")).toBe(true);
   });
 });

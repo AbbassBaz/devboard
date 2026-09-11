@@ -103,4 +103,15 @@ describe("Control", () => {
     expect(tail.size).toBeGreaterThan(0);
     expect(tail.path).toBe(path);
   });
+
+  test("clearLog truncates to a single header line", async () => {
+    mkdirSync(control.logDir, { recursive: true });
+    writeFileSync(control.logPath("wipe"), "old noise\nmore\n");
+    const cleared = await control.clearLog("wipe");
+    const tail = await control.tailLog("wipe", 10);
+    expect(tail.lines).toHaveLength(1);
+    expect(tail.lines[0]).toContain("cleared");
+    expect(cleared.size).toBe(tail.size);
+    await expect(control.clearLog("missing")).rejects.toThrow("no log");
+  });
 });

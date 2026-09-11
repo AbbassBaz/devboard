@@ -2,9 +2,13 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { Control, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
+import { collectAlerts } from "./lib/attention";
+import { applyReadiness, firstFreePort } from "./lib/health";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
+import { parseLinks, projectViews, pruneProjectMembers, servicesInFolder } from "./lib/projects";
 import { Registry } from "./lib/registry";
-import type { RunningService, StartSpec } from "./lib/types";
+import type { ProjectLink, RunningService, StartSpec, WorktreeInfo } from "./lib/types";
+import { createWorktree, openInEditor, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 export type Deps = {
   discover: () => Promise<RunningService[]>;
@@ -21,6 +25,47 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   const { registry, control } = deps;
 
   const findRunning = async (rootPid: number) => (await deps.discover()).find((s) => s.rootPid === rootPid);
+
+  const snapshot = async () => {
+    const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
+    const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
+    return { running, pinned, services };
+  };
+
+  const folderMembers = async (folder: string): Promise<string[]> => {
+    const { running, services } = await snapshot();
+    const ids: string[] = [];
+    for (const s of servicesInFolder(services, folder)) {
+      if (s.hidden || !s.id) continue;
+      if (s.pinned) {
+        ids.push(s.id);
+        continue;
+      }
+      const live = running.find((r) => r.rootPid === s.rootPid);
+      if (!live?.cwd) continue;
+      ids.push((await registry.pin(live, s.name)).id);
+    }
+    return [...new Set(ids)];
+  };
+
+  const readProjectInput = async (req: Request) => {
+    const body = await readBody(req);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const folderRaw = typeof body.folder === "string" ? body.folder.trim() : "";
+    const folder = folderRaw ? expandHome(folderRaw) : undefined;
+    if (folder) {
+      const info = await stat(folder).catch(() => undefined);
+      if (!info?.isDirectory()) throw new Error(`folder does not exist: ${folder}`);
+    }
+    const links: ProjectLink[] = Array.isArray(body.links)
+      ? (body.links as ProjectLink[])
+      : typeof body.links === "string"
+        ? parseLinks(body.links)
+        : [];
+    const addFromFolder = body.addFromFolder === true && !!folder;
+    const memberIds = Array.isArray(body.memberIds) ? (body.memberIds as unknown[]).filter((id): id is string => typeof id === "string") : [];
+    return { name, folder, links, addFromFolder, memberIds };
+  };
 
   const readBody = async (req: Request): Promise<Record<string, unknown>> => {
     try {
@@ -52,8 +97,18 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
 
       if (method === "GET" && pathname === "/api/services") {
         const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
-        const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
-        return json({ services, generatedAt: new Date().toISOString() });
+        let services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
+        services = await applyReadiness(services, pinned);
+        const known = new Set(services.map((s) => s.id).filter((id): id is string => !!id));
+        const stored = await registry.loadProjects();
+        const projects = pruneProjectMembers(stored, known);
+        if (projects.some((p, i) => p.memberIds.length !== stored[i]?.memberIds.length)) await registry.saveProjects(projects);
+        return json({
+          services,
+          projects: projectViews(projects, services),
+          presets: await registry.loadPresets(),
+          generatedAt: new Date().toISOString(),
+        });
       }
 
       if (method === "POST" && pathname === "/api/kill") {
@@ -100,7 +155,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
 
       const editPinned = /^\/api\/pinned\/([^/]+)$/.exec(pathname);
       if ((method === "POST" && pathname === "/api/pinned") || (method === "PUT" && editPinned)) {
-        const { name, cwd, command, port } = await readBody(req);
+        const { name, cwd, command, port, healthUrl } = await readBody(req);
         if (typeof name !== "string" || !name.trim()) return fail("name required");
         if (typeof cwd !== "string" || !cwd.trim()) return fail("folder required");
         if (typeof command !== "string" || !command.trim()) return fail("command required");
@@ -109,7 +164,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const folder = expandHome(cwd.trim());
         const info = await stat(folder).catch(() => undefined);
         if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
-        const input = { name: name.trim(), cwd: folder, command: command.trim(), port: portNum };
+        const input = {
+          name: name.trim(), cwd: folder, command: command.trim(), port: portNum,
+          healthUrl: typeof healthUrl === "string" && healthUrl.trim() ? healthUrl.trim() : undefined,
+        };
         if (editPinned) {
           const pinned = await registry.replace(decodeURIComponent(editPinned[1]), input);
           return pinned ? json({ pinned }) : fail("no pinned service with that id", 404);
@@ -143,6 +201,222 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         return removed ? json({ ok: true }) : fail("not pinned", 404);
       }
 
+      if (method === "POST" && pathname === "/api/projects") {
+        let input;
+        try { input = await readProjectInput(req); } catch (e) { return fail(e instanceof Error ? e.message : String(e)); }
+        if (!input.name) return fail("name required");
+        const memberIds = input.addFromFolder && input.folder
+          ? [...new Set([...input.memberIds, ...await folderMembers(input.folder)])]
+          : input.memberIds;
+        return json({ project: await registry.addProject({ ...input, memberIds }) }, 201);
+      }
+
+      const editProject = /^\/api\/projects\/([^/]+)$/.exec(pathname);
+      if (method === "PUT" && editProject) {
+        let input;
+        try { input = await readProjectInput(req); } catch (e) { return fail(e instanceof Error ? e.message : String(e)); }
+        if (!input.name) return fail("name required");
+        const current = (await registry.loadProjects()).find((p) => p.id === decodeURIComponent(editProject[1]));
+        if (!current) return fail("no project with that id", 404);
+        const memberIds = input.addFromFolder && input.folder
+          ? [...new Set([...current.memberIds, ...input.memberIds, ...await folderMembers(input.folder)])]
+          : (input.memberIds.length ? input.memberIds : current.memberIds);
+        const project = await registry.replaceProject(current.id, { ...input, memberIds });
+        return json({ project });
+      }
+      if (method === "DELETE" && editProject) {
+        const removed = await registry.deleteProject(decodeURIComponent(editProject[1]));
+        return removed ? json({ ok: true }) : fail("no project with that id", 404);
+      }
+
+      const projectMembers = /^\/api\/projects\/([^/]+)\/members$/.exec(pathname);
+      if (method === "POST" && projectMembers) {
+        const projectId = decodeURIComponent(projectMembers[1]);
+        const body = await readBody(req);
+        if (typeof body.folder === "string" && body.folder.trim()) {
+          const folder = expandHome(body.folder.trim());
+          const info = await stat(folder).catch(() => undefined);
+          if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
+          const ids = await folderMembers(folder);
+          let project = (await registry.loadProjects()).find((p) => p.id === projectId);
+          if (!project) return fail("no project with that id", 404);
+          for (const id of ids) project = (await registry.addProjectMember(projectId, id)) ?? project;
+          return json({ project });
+        }
+        if (typeof body.id !== "string" || !body.id) return fail("id or folder required");
+        const { services, running } = await snapshot();
+        const svc = services.find((s) => s.id === body.id);
+        if (!svc || svc.kind !== "dev") return fail("no dev service with that id", 404);
+        let serviceId = svc.id!;
+        if (!svc.pinned) {
+          const live = running.find((r) => r.rootPid === svc.rootPid);
+          if (!live?.cwd) return fail("working directory unknown, pin it first");
+          serviceId = (await registry.pin(live, svc.name)).id;
+        }
+        const project = await registry.addProjectMember(projectId, serviceId);
+        return project ? json({ project }) : fail("no project with that id", 404);
+      }
+
+      const dropMember = /^\/api\/projects\/([^/]+)\/members\/([^/]+)$/.exec(pathname);
+      if (method === "DELETE" && dropMember) {
+        const project = await registry.removeProjectMember(decodeURIComponent(dropMember[1]), decodeURIComponent(dropMember[2]));
+        return project ? json({ project }) : fail("no project with that id", 404);
+      }
+
+      const startProject = /^\/api\/projects\/([^/]+)\/start$/.exec(pathname);
+      if (method === "POST" && startProject) {
+        const project = (await registry.loadProjects()).find((p) => p.id === decodeURIComponent(startProject[1]));
+        if (!project) return fail("no project with that id", 404);
+        const { services, pinned } = await snapshot();
+        const errors: { id: string; error: string }[] = [];
+        const started: { id: string; pid: number }[] = [];
+        await Promise.all(project.memberIds.map(async (id) => {
+          const svc = services.find((s) => s.id === id);
+          if (!svc || svc.status === "running") return;
+          const spec = pinned.find((p) => p.id === id);
+          if (!spec) { errors.push({ id, error: "not pinned" }); return; }
+          try { started.push({ id, pid: await control.start(spec) }); }
+          catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
+        }));
+        return json({ started, errors });
+      }
+
+      const stopProject = /^\/api\/projects\/([^/]+)\/stop$/.exec(pathname);
+      if (method === "POST" && stopProject) {
+        const project = (await registry.loadProjects()).find((p) => p.id === decodeURIComponent(stopProject[1]));
+        if (!project) return fail("no project with that id", 404);
+        const { services } = await snapshot();
+        const errors: { id: string; error: string }[] = [];
+        const stopped: string[] = [];
+        await Promise.all(project.memberIds.map(async (id) => {
+          const svc = services.find((s) => s.id === id);
+          if (!svc || svc.status !== "running" || !svc.rootPid || !svc.pids) return;
+          try {
+            await killTree(svc.pids);
+            stopped.push(id);
+          } catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
+        }));
+        return json({ stopped, errors });
+      }
+
+      if (method === "GET" && pathname === "/api/worktrees") {
+        const dir = url.searchParams.get("dir") ?? "";
+        if (!dir.trim()) return fail("dir required");
+        const { services } = await snapshot();
+        return json(await scanWorktrees(dir, services));
+      }
+
+      if (method === "POST" && pathname === "/api/worktrees/prune") {
+        const { dir } = await readBody(req);
+        if (typeof dir !== "string" || !dir.trim()) return fail("dir required");
+        return json(await pruneStaleWorktrees(dir));
+      }
+
+      if (method === "POST" && pathname === "/api/worktrees/create") {
+        const { repo, branch, path } = await readBody(req);
+        if (typeof repo !== "string" || !repo.trim()) return fail("repo required");
+        if (typeof branch !== "string" || !branch.trim()) return fail("branch required");
+        return json(await createWorktree(repo, branch, typeof path === "string" ? path : undefined), 201);
+      }
+
+      if (method === "POST" && pathname === "/api/worktrees/retire") {
+        const { path, force } = await readBody(req);
+        if (typeof path !== "string" || !path.trim()) return fail("path required");
+        return json(await retireWorktree(path, force === true));
+      }
+
+      if (method === "POST" && pathname === "/api/worktrees/launch") {
+        const { path } = await readBody(req);
+        if (typeof path !== "string" || !path.trim()) return fail("path required");
+        const folder = expandHome(path.trim());
+        const { services, pinned } = await snapshot();
+        const members = servicesInFolder(services, folder).filter((s) => s.kind === "dev" && !s.hidden && s.id);
+        const errors: { id: string; error: string }[] = [];
+        const started: { id: string; pid: number }[] = [];
+        await Promise.all(members.map(async (s) => {
+          if (s.status === "running") return;
+          const spec = pinned.find((p) => p.id === s.id);
+          if (!spec) { errors.push({ id: s.id!, error: "not pinned" }); return; }
+          try { started.push({ id: s.id!, pid: await control.start(spec) }); }
+          catch (e) { errors.push({ id: s.id!, error: e instanceof Error ? e.message : String(e) }); }
+        }));
+        return json({ started, errors, port: firstFreePort(services.flatMap((s) => s.ports)) });
+      }
+
+      if (method === "POST" && pathname === "/api/worktrees/remove") {
+        const { path } = await readBody(req);
+        if (typeof path !== "string" || !path.trim()) return fail("path required");
+        return json(await removeOrphanedWorktree(path));
+      }
+
+      if (method === "POST" && pathname === "/api/open") {
+        const { path } = await readBody(req);
+        if (typeof path !== "string" || !path.trim()) return fail("path required");
+        return json(await openInEditor(path));
+      }
+
+      if (method === "GET" && pathname === "/api/attention") {
+        const dir = url.searchParams.get("dir") || "~/Documents/Personal/Projects";
+        const { services } = await snapshot();
+        let worktrees: WorktreeInfo[] = [];
+        try { worktrees = (await scanWorktrees(dir, services)).worktrees; } catch { worktrees = []; }
+        const lastErrors = new Map<string, string[]>();
+        await Promise.all(services.filter((s) => s.hasLog && s.id && s.status === "stopped").map(async (s) => {
+          try { lastErrors.set(s.id!, (await control.tailLog(s.id!, 40)).lines); } catch {}
+        }));
+        return json({ alerts: collectAlerts(services, worktrees, await control.logDirSize(), lastErrors), worktreesDir: dir });
+      }
+
+      if (method === "POST" && pathname === "/api/presets") {
+        const body = await readBody(req);
+        if (typeof body.name !== "string" || !body.name.trim()) return fail("name required");
+        const serviceIds = Array.isArray(body.serviceIds) ? body.serviceIds.filter((id): id is string => typeof id === "string") : [];
+        const urls = Array.isArray(body.urls) ? body.urls.filter((u): u is string => typeof u === "string") : typeof body.urls === "string" ? body.urls.split("\n").map((u) => u.trim()).filter(Boolean) : [];
+        return json({
+          preset: await registry.addPreset({
+            name: body.name,
+            projectId: typeof body.projectId === "string" ? body.projectId : undefined,
+            serviceIds,
+            urls,
+            worktree: typeof body.worktree === "string" ? body.worktree : undefined,
+            openEditor: body.openEditor === true,
+          }),
+        }, 201);
+      }
+
+      const delPreset = /^\/api\/presets\/([^/]+)$/.exec(pathname);
+      if (method === "DELETE" && delPreset) {
+        const removed = await registry.deletePreset(decodeURIComponent(delPreset[1]));
+        return removed ? json({ ok: true }) : fail("no preset with that id", 404);
+      }
+
+      const runPreset = /^\/api\/presets\/([^/]+)\/resume$/.exec(pathname);
+      if (method === "POST" && runPreset) {
+        const preset = (await registry.loadPresets()).find((p) => p.id === decodeURIComponent(runPreset[1]));
+        if (!preset) return fail("no preset with that id", 404);
+        const { services, pinned } = await snapshot();
+        const errors: { id: string; error: string }[] = [];
+        const started: { id: string; pid: number }[] = [];
+        await Promise.all(preset.serviceIds.map(async (id) => {
+          const svc = services.find((s) => s.id === id);
+          if (svc?.status === "running") return;
+          const spec = pinned.find((p) => p.id === id);
+          if (!spec) { errors.push({ id, error: "not pinned" }); return; }
+          try { started.push({ id, pid: await control.start(spec) }); }
+          catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
+        }));
+        if (preset.openEditor && preset.worktree) {
+          try { await openInEditor(preset.worktree); } catch (e) { errors.push({ id: "editor", error: e instanceof Error ? e.message : String(e) }); }
+        }
+        return json({ started, errors, urls: preset.urls });
+      }
+
+      if (method === "POST" && pathname === "/api/ports/next") {
+        const { services } = await snapshot();
+        const used = services.flatMap((s) => s.ports);
+        return json({ port: firstFreePort(used) });
+      }
+
       const logs = /^\/api\/logs\/([^/]+)$/.exec(pathname);
       if (method === "GET" && logs) {
         const id = decodeURIComponent(logs[1]);
@@ -150,6 +424,11 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const requested = Number(url.searchParams.get("lines") ?? 200);
         const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 5000) : 200;
         return json(await control.tailLog(id, lines));
+      }
+      if (method === "DELETE" && logs) {
+        const id = decodeURIComponent(logs[1]);
+        if (!control.hasLog(id)) return fail("no log for that id", 404);
+        return json(await control.clearLog(id));
       }
 
       return fail("not found", 404);

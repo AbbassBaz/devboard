@@ -1,7 +1,8 @@
 import { mkdir, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Pinned, RunningService } from "./types";
+import { assignMember, pruneProjectMembers, removeMember, renameMember } from "./projects";
+import type { Pinned, Preset, Project, ProjectLink, RunningService } from "./types";
 
 export const DEVBOARD_HOME = process.env.DEVBOARD_HOME ?? join(homedir(), ".devboard");
 
@@ -50,6 +51,7 @@ export class Registry {
     const next = list.filter((p) => p.id !== oldId && p.id !== pinned.id);
     next.push(pinned);
     await this.save(next);
+    if (oldId !== pinned.id) await this.retargetMember(oldId, pinned.id);
     return pinned;
   }
 
@@ -83,6 +85,137 @@ export class Registry {
     const next = list.filter((p) => p.id !== id);
     if (next.length === list.length) return false;
     await this.save(next);
+    await this.saveProjects(removeMember(await this.loadProjects(), id));
+    return true;
+  }
+
+  get projectsPath(): string {
+    return join(this.home, "projects.json");
+  }
+
+  async loadProjects(): Promise<Project[]> {
+    const file = Bun.file(this.projectsPath);
+    if (!(await file.exists())) return [];
+    const raw = (await file.json()) as Project[];
+    return raw.map((p) => ({
+      id: p.id,
+      name: p.name,
+      folder: p.folder || undefined,
+      memberIds: [...new Set(p.memberIds ?? [])],
+      links: Array.isArray(p.links) ? p.links : [],
+    }));
+  }
+
+  async saveProjects(list: Project[]): Promise<void> {
+    await mkdir(this.home, { recursive: true });
+    const tmp = `${this.projectsPath}.tmp`;
+    await Bun.write(tmp, JSON.stringify(list, null, 2) + "\n");
+    await rename(tmp, this.projectsPath);
+  }
+
+  async addProject(input: { name: string; folder?: string; memberIds?: string[]; links?: ProjectLink[] }): Promise<Project> {
+    const name = input.name.trim();
+    if (!name) throw new Error("name required");
+    const project: Project = {
+      id: slugify(name),
+      name,
+      folder: input.folder || undefined,
+      memberIds: [...new Set(input.memberIds ?? [])],
+      links: input.links ?? [],
+    };
+    const list = (await this.loadProjects()).filter((p) => p.id !== project.id);
+    list.push(project);
+    await this.saveProjects(list);
+    return project;
+  }
+
+  async replaceProject(id: string, input: { name: string; folder?: string; memberIds?: string[]; links?: ProjectLink[] }): Promise<Project | undefined> {
+    const list = await this.loadProjects();
+    const current = list.find((p) => p.id === id);
+    if (!current) return undefined;
+    const name = input.name.trim();
+    if (!name) throw new Error("name required");
+    const project: Project = {
+      id: slugify(name),
+      name,
+      folder: input.folder || undefined,
+      memberIds: [...new Set(input.memberIds ?? current.memberIds)],
+      links: input.links ?? current.links,
+    };
+    const next = list.filter((p) => p.id !== id && p.id !== project.id);
+    next.push(project);
+    await this.saveProjects(next);
+    return project;
+  }
+
+  async deleteProject(id: string): Promise<boolean> {
+    const list = await this.loadProjects();
+    const next = list.filter((p) => p.id !== id);
+    if (next.length === list.length) return false;
+    await this.saveProjects(next);
+    return true;
+  }
+
+  async addProjectMember(projectId: string, serviceId: string): Promise<Project | undefined> {
+    const list = await this.loadProjects();
+    if (!list.some((p) => p.id === projectId)) return undefined;
+    const next = assignMember(list, projectId, serviceId);
+    await this.saveProjects(next);
+    return next.find((p) => p.id === projectId);
+  }
+
+  async removeProjectMember(projectId: string, serviceId: string): Promise<Project | undefined> {
+    const list = await this.loadProjects();
+    const current = list.find((p) => p.id === projectId);
+    if (!current) return undefined;
+    const next = list.map((p) => (p.id === projectId ? { ...p, memberIds: p.memberIds.filter((id) => id !== serviceId) } : p));
+    await this.saveProjects(next);
+    return next.find((p) => p.id === projectId);
+  }
+
+  async syncProjectMembers(knownIds: ReadonlySet<string>): Promise<Project[]> {
+    const list = pruneProjectMembers(await this.loadProjects(), knownIds);
+    await this.saveProjects(list);
+    return list;
+  }
+
+  async retargetMember(oldId: string, newId: string): Promise<void> {
+    if (oldId === newId) return;
+    await this.saveProjects(renameMember(await this.loadProjects(), oldId, newId));
+  }
+
+  get presetsPath(): string {
+    return join(this.home, "presets.json");
+  }
+
+  async loadPresets(): Promise<Preset[]> {
+    const file = Bun.file(this.presetsPath);
+    if (!(await file.exists())) return [];
+    return (await file.json()) as Preset[];
+  }
+
+  async savePresets(list: Preset[]): Promise<void> {
+    await mkdir(this.home, { recursive: true });
+    const tmp = `${this.presetsPath}.tmp`;
+    await Bun.write(tmp, JSON.stringify(list, null, 2) + "\n");
+    await rename(tmp, this.presetsPath);
+  }
+
+  async addPreset(input: Omit<Preset, "id">): Promise<Preset> {
+    const name = input.name.trim();
+    if (!name) throw new Error("name required");
+    const preset: Preset = { ...input, name, id: slugify(name), serviceIds: [...new Set(input.serviceIds)], urls: input.urls ?? [] };
+    const list = (await this.loadPresets()).filter((p) => p.id !== preset.id);
+    list.push(preset);
+    await this.savePresets(list);
+    return preset;
+  }
+
+  async deletePreset(id: string): Promise<boolean> {
+    const list = await this.loadPresets();
+    const next = list.filter((p) => p.id !== id);
+    if (next.length === list.length) return false;
+    await this.savePresets(next);
     return true;
   }
 }

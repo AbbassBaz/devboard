@@ -77,6 +77,28 @@ export class Control {
     }
   }
 
+  async logDirSize(): Promise<number> {
+    const { readdir } = await import("node:fs/promises");
+    try {
+      const files = await readdir(this.logDir);
+      let total = 0;
+      for (const name of files) {
+        try { total += (await stat(join(this.logDir, name))).size; } catch {}
+      }
+      return total;
+    } catch {
+      return 0;
+    }
+  }
+
+  async clearLog(id: string): Promise<{ path: string; size: number }> {
+    if (!this.hasLog(id)) throw new Error("no log for that id");
+    const path = this.logPath(id);
+    await Bun.write(path, `===== ${new Date().toISOString()} cleared =====\n`);
+    const { size } = await stat(path);
+    return { path, size };
+  }
+
   async tailLog(id: string, lines = 200): Promise<{ lines: string[]; path: string; size: number }> {
     const path = this.logPath(id);
     const { size } = await stat(path);

@@ -90,4 +90,38 @@ describe("Registry", () => {
     expect(text.endsWith("\n")).toBe(true);
     expect(JSON.parse(text)).toHaveLength(1);
   });
+
+  test("projects persist, a member lives in one project, and unpin drops it", async () => {
+    await registry.add({ name: "api", cwd: "/tmp/a", command: "true", port: 1 });
+    await registry.add({ name: "web", cwd: "/tmp/b", command: "true", port: 2 });
+    const hub = await registry.addProject({ name: "Hub", folder: "/tmp", memberIds: ["api-1"] });
+    expect(hub.id).toBe("hub");
+    await registry.addProject({ name: "Other", memberIds: ["web-2"] });
+    await registry.addProjectMember("hub", "web-2");
+    expect((await registry.loadProjects()).find((p) => p.id === "other")!.memberIds).toEqual([]);
+    expect((await registry.loadProjects()).find((p) => p.id === "hub")!.memberIds.sort()).toEqual(["api-1", "web-2"]);
+    await registry.unpin("web-2");
+    expect((await registry.loadProjects()).find((p) => p.id === "hub")!.memberIds).toEqual(["api-1"]);
+  });
+
+  test("renaming a pinned service keeps it in its project", async () => {
+    await registry.add({ name: "api", cwd: "/tmp/a", command: "true", port: 1 });
+    await registry.addProject({ name: "Hub", memberIds: ["api-1"] });
+    await registry.replace("api-1", { name: "core-api", cwd: "/tmp/a", command: "true", port: 1 });
+    expect((await registry.loadProjects())[0].memberIds).toEqual(["core-api-1"]);
+  });
+
+  test("presets persist and can be replaced by the same name", async () => {
+    const preset = await registry.addPreset({
+      name: "Frontend only",
+      serviceIds: ["web-3000", "web-3000"],
+      urls: ["http://127.0.0.1:3000"],
+      openEditor: true,
+    });
+    expect(preset).toMatchObject({ id: "frontend-only", serviceIds: ["web-3000"], openEditor: true });
+    await registry.addPreset({ name: "Frontend only", serviceIds: ["web-3001"], urls: [] });
+    expect((await registry.loadPresets()).map((p) => p.serviceIds)).toEqual([["web-3001"]]);
+    expect(await registry.deletePreset("frontend-only")).toBe(true);
+    expect(await registry.deletePreset("frontend-only")).toBe(false);
+  });
 });

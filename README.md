@@ -15,7 +15,8 @@ Start it from your normal zsh so that services launched from the page inherit
 the same PATH (fnm's node, pnpm, bun).
 
 `PORT` overrides the port. `DEVBOARD_HOME` overrides `~/.devboard`, where
-`services.json` (pinned list) and `logs/<id>.log` live.
+`services.json` (pinned list), `projects.json`, `presets.json`, `ignored.json`,
+and `logs/<id>.log` live.
 
 ## What it does
 
@@ -32,11 +33,14 @@ the same PATH (fnm's node, pnpm, bun).
 - **Start / Restart.** Runs the saved command in its folder via `/bin/sh -c`,
   detached in its own process group, output appended to
   `~/.devboard/logs/<id>.log`. Closing devboard does not stop what it started.
-- **Logs.** Last 2000 lines of that file, refreshed every 2 seconds, in a sidebar on the
-  right. Drag its left edge to resize; the width is remembered. Filter lines by text,
-  Follow keeps the newest line in view and pauses when you scroll up, Escape closes.
+- **Logs.** Last 4000 lines, refreshed every 2 seconds, in a sidebar. Drag the left
+  edge to resize. Search with `/`, jump matches with Enter, filter **ERR / WRN / INF**,
+  wrap or unwrap long lines (click a row to expand one), Follow pauses when you scroll
+  up. Copy or save the filtered view. **Clear** truncates the file. ANSI colors stay.
   A service that devboard did not start has no log yet; the pane says so and offers to
   restart it under devboard.
+- **Readiness.** Running cards are probed on each refresh. 2xx/3xx on the optional
+  health URL (or `http://127.0.0.1:<port>/`) is ready; anything else is unhealthy.
 - **Hide.** Moves a card into the collapsed Hidden list below the board, for things like
   editor helpers that happen to listen on a port. Show brings it back. Stored in
   `~/.devboard/ignored.json`.
@@ -45,6 +49,26 @@ the same PATH (fnm's node, pnpm, bun).
   unsaved ones so they can be switched back on.
 - **Add server.** The button in the header opens a form for name, folder, command and
   port. The folder must exist. The new card starts switched off; switch it on to run it.
+- **Projects.** + Project groups servers you start together. Name it, optionally point
+  at a folder and tick “Add everything from this folder” to pull in every card under
+  that path. Start project / Stop project switch the whole group at once. Combined
+  CPU, memory, ports, and extra links sit on the project bar. A server lives in one
+  project; Ungroup puts it back with the other cards. Stored in
+  `~/.devboard/projects.json`.
+- **Worktrees.** The Worktrees tab inventories every checkout in a folder: branch,
+  dirty, disk, and which servers are live there. Create a sibling worktree from a
+  branch, open it in Cursor (then VS Code, Sublime, or Finder), launch the servers
+  in that tree on a free port, or retire it. Retire refuses the main checkout, a
+  locked tree, or uncommitted changes unless you force. Stale registrations still
+  prune; orphaned folders whose gitdir is gone can be deleted. The last folder is
+  remembered.
+- **Resume presets.** Save a set of servers, URLs, and an optional worktree as
+  “Frontend only”, “Full stack”, or whatever you name it. Resume starts them in
+  parallel, opens the URLs, and can open the worktree in the editor. Stored in
+  `~/.devboard/presets.json`.
+- **Attention.** Port conflicts across different folders, stopped servers whose last
+  log looks like a crash, dirty linked worktrees, and a log directory at or over
+  500 MB.
 - **Edit.** Pinned cards have an Edit action that opens the same form pre-filled. The
   saved list is `~/.devboard/services.json`; it is read on every request, so editing the
   file by hand works too, no restart needed.
@@ -54,12 +78,14 @@ the same PATH (fnm's node, pnpm, bun).
 
 ## The page
 
-One card per dev server. The switch on the card is the state: green and on means
-running, grey and off means stopped. Switching off kills the process tree; if the card
-was not pinned yet it is pinned first so it stays on the board and can be switched back
-on. Switching on runs the saved command from devboard. Restart is kill then start.
-Remove drops a pinned card. System processes (Postgres, Redis, macOS services) sit in a
-collapsed list below the cards with only a Kill action.
+Three views in the header: **Board**, **Worktrees**, **Attention**. One card per
+dev server. The switch is the state: green and on means running, grey and off
+means stopped. A readiness rail shows ready, starting, unhealthy, or stopped.
+Switching off kills the process tree; if the card was not pinned yet it is pinned
+first so it stays on the board and can be switched back on. Switching on runs the
+saved command from devboard. Restart is kill then start. Remove drops a pinned
+card. System processes (Postgres, Redis, macOS services) sit in a collapsed list
+below the cards with only a Kill action.
 
 ## Limits
 
