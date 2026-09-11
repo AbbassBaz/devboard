@@ -131,7 +131,8 @@ first.
 - **Worktrees.** The Worktrees sheet inventories every checkout in a folder:
   branch, dirty, disk, and which servers are live there. Create a sibling
   worktree from a branch, open it in Cursor (then VS Code, Sublime, or Finder),
-  launch the servers in that tree on a free port, or retire it. Retire refuses the
+  launch the servers in that tree on free ports (copies pins from the main
+  checkout if that tree has none yet), or retire it. Retire refuses the
   main checkout, a locked tree, or uncommitted changes unless you force. Stale
   registrations still prune; orphaned folders whose gitdir is gone can be
   deleted. The last folder is remembered.

@@ -34,6 +34,21 @@ export function servicesInFolder(services: Service[], folder: string): Service[]
   return services.filter((s) => s.kind === "dev" && underFolder(s.cwd, folder));
 }
 
+/** Path of `cwd` relative to `folder`, or undefined if it is not underneath. "" means cwd is the folder. */
+export function relUnder(cwd: string, folder: string): string | undefined {
+  if (!underFolder(cwd, folder)) return undefined;
+  const a = cwd.replace(/\/+$/, "");
+  const b = folder.replace(/\/+$/, "");
+  return a === b ? "" : a.slice(b.length + 1);
+}
+
+export function mapUnder(cwd: string, from: string, to: string): string | undefined {
+  const rel = relUnder(cwd, from);
+  if (rel === undefined) return undefined;
+  const root = to.replace(/\/+$/, "");
+  return rel ? `${root}/${rel}` : root;
+}
+
 /** A service belongs to at most one project. Adding it here drops it from every other. */
 export function assignMember(projects: Project[], projectId: string, serviceId: string): Project[] {
   return projects.map((p) => {

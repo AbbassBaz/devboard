@@ -17,7 +17,7 @@ const handle = createHandler({ discover: async () => running, registry, control 
 const docs: RunningService = {
   rootPid: 64672, pids: [64672, 64728, 64734], ports: [3010],
   cwd: home, command: "node /x/pnpm dev",
-  name: "oncore-docs", kind: "dev", uptime: "23-01:48:35", cpu: 0.2, memMb: 149,
+  name: "docs-site", kind: "dev", uptime: "23-01:48:35", cpu: 0.2, memMb: 149,
 };
 
 const spawned: number[] = [];
@@ -46,6 +46,7 @@ describe("GET /", () => {
     expect(html).toContain('id="projectBtn"');
     expect(html).toContain("/app.js");
     expect(html).toContain("/app.css");
+    expect(html).not.toContain("fonts.googleapis.com");
   });
 
   test("serves the split stylesheet and script", async () => {
@@ -77,12 +78,12 @@ describe("GET /api/services", () => {
 describe("POST /api/ignore and DELETE /api/ignore/:id", () => {
   test("hides a service by id and shows it again", async () => {
     running = [docs];
-    expect((await call("POST", "/api/ignore", { id: "oncore-docs-3010" })).status).toBe(200);
+    expect((await call("POST", "/api/ignore", { id: "docs-site-3010" })).status).toBe(200);
     let list = (await (await call("GET", "/api/services")).json()).services;
-    expect(list.find((s: Service) => s.id === "oncore-docs-3010")).toMatchObject({ hidden: true, status: "running" });
-    expect((await call("DELETE", "/api/ignore/oncore-docs-3010")).status).toBe(200);
+    expect(list.find((s: Service) => s.id === "docs-site-3010")).toMatchObject({ hidden: true, status: "running" });
+    expect((await call("DELETE", "/api/ignore/docs-site-3010")).status).toBe(200);
     list = (await (await call("GET", "/api/services")).json()).services;
-    expect(list.find((s: Service) => s.id === "oncore-docs-3010")!.hidden).toBe(false);
+    expect(list.find((s: Service) => s.id === "docs-site-3010")!.hidden).toBe(false);
     expect((await call("POST", "/api/ignore", {})).status).toBe(400);
   });
 });
@@ -126,11 +127,11 @@ describe("POST /api/pin and DELETE /api/pin/:id", () => {
     running = [docs];
     const res = await call("POST", "/api/pin", { rootPid: 64672 });
     expect(res.status).toBe(200);
-    expect((await res.json()).pinned.id).toBe("oncore-docs-3010");
-    expect((await registry.load()).some((p) => p.id === "oncore-docs-3010")).toBe(true);
-    const del = await call("DELETE", "/api/pin/oncore-docs-3010");
+    expect((await res.json()).pinned.id).toBe("docs-site-3010");
+    expect((await registry.load()).some((p) => p.id === "docs-site-3010")).toBe(true);
+    const del = await call("DELETE", "/api/pin/docs-site-3010");
     expect(del.status).toBe(200);
-    expect((await call("DELETE", "/api/pin/oncore-docs-3010")).status).toBe(404);
+    expect((await call("DELETE", "/api/pin/docs-site-3010")).status).toBe(404);
   });
 
   test("404 when the rootPid is not running, 400 when missing", async () => {
@@ -246,6 +247,42 @@ describe("GET /api/worktrees and prune/remove", () => {
     const again = await (await call("GET", `/api/worktrees?dir=${encodeURIComponent(root)}`)).json();
     expect(again.stale).toEqual([]);
   });
+
+  test("launch copies main-checkout pins into a worktree on free ports", async () => {
+    const root = mkdtempSync(join(tmpdir(), "devboard-launch-"));
+    const repo = join(root, "app");
+    const linked = join(root, "app-feat");
+    const git = async (cwd: string, args: string[]) => {
+      const proc = Bun.spawn(["git", "-c", "user.name=devboard", "-c", "user.email=devboard@test", ...args], {
+        cwd, stdout: "ignore", stderr: "pipe",
+      });
+      const err = await new Response(proc.stderr).text();
+      if ((await proc.exited) !== 0) throw new Error(err);
+    };
+    await git(root, ["init", "-q", "app"]);
+    mkdirSync(join(repo, "apps", "api"), { recursive: true });
+    writeFileSync(join(repo, "apps", "api", "ok.txt"), "1");
+    await git(repo, ["add", "."]);
+    await git(repo, ["commit", "-qm", "api"]);
+    await git(repo, ["worktree", "add", "-q", "-b", "feat", linked]);
+
+    running = [];
+    await registry.save([]);
+    await registry.add({
+      name: "api", cwd: join(repo, "apps", "api"),
+      command: "echo launched --port 3003", port: 3003,
+    });
+    const res = await call("POST", "/api/worktrees/launch", { path: linked });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.created).toHaveLength(1);
+    expect(body.created[0].name).toBe("api");
+    expect(body.created[0].cwd.endsWith("/app-feat/apps/api")).toBe(true);
+    expect(body.created[0].port).not.toBe(3003);
+    expect(body.created[0].command).toBe(`echo launched --port ${body.created[0].port}`);
+    expect(body.started[0].id).toBe(body.created[0].id);
+    spawned.push(body.started[0].pid);
+  });
 });
 
 describe("projects", () => {
@@ -343,6 +380,12 @@ describe("healthUrl, ports, presets and attention", () => {
     expect(res.status).toBe(200);
     expect((await res.json()).suggestions[0]).toMatchObject({ command: "pnpm dev", port: 5173 });
     expect((await call("GET", "/api/suggest")).status).toBe(400);
+  });
+
+  test("serves a self-hosted font", async () => {
+    const res = await call("GET", "/fonts/IBMPlexSans-Regular.woff2");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("font/woff2");
   });
 
   test("GET /api/env reads the current process environment", async () => {

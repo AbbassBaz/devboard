@@ -226,9 +226,15 @@ function paintList() {
     const members = rows.filter((s) => p.memberIds.includes(s.id));
     if (!members.length && query.trim()) continue;
     const on = members.filter((s) => s.status === "running").length;
+    const ports = [...new Set((p.ports ?? []).concat(members.flatMap((s) => s.ports)))].sort((a, b) => a - b);
+    const links = [
+      ...ports.map((port) => `<a class="port" href="http://localhost:${port}" target="_blank" rel="noopener" data-act="open-port">:${port}</a>`),
+      ...(p.links ?? []).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`),
+    ].join("");
     parts.push(`<div class="g-head">
       <span class="g-label">${esc(p.name)}</span>
       <span class="mono">${on}/${members.length}</span>
+      ${links ? `<span class="g-links">${links}</span>` : ""}
       <span class="g-acts">
         <button type="button" class="start" data-act="project-start" data-id="${esc(p.id)}">start</button>
         <button type="button" class="stop" data-act="project-stop" data-id="${esc(p.id)}" data-name="${esc(p.name)}">stop</button>
@@ -713,7 +719,7 @@ async function scanWt() {
 }
 
 async function loadAttention() {
-  const dir = lastWtDir() || "~/Documents/Personal/Projects";
+  const dir = lastWtDir();
   try {
     const data = await api("GET", `/api/attention?dir=${encodeURIComponent(dir)}`);
     alerts = data.alerts ?? [];
@@ -790,7 +796,7 @@ document.addEventListener("click", async (ev) => {
   if (act === "stop-all") { switchAll(false); return; }
   if (act === "sheet-worktrees") {
     openSheet("sheet-worktrees");
-    if (!$("#wt-dir").value) $("#wt-dir").value = lastWtDir() || "~/Documents/Personal/Projects";
+    if (!$("#wt-dir").value) $("#wt-dir").value = lastWtDir();
     if (!worktrees.length && !wtStale.length) scanWt();
     return;
   }
@@ -868,7 +874,10 @@ document.addEventListener("click", async (ev) => {
     else if (act === "wt-launch") {
       const result = await api("POST", "/api/worktrees/launch", { path: btn.dataset.path });
       for (const err of result.errors ?? []) toast(`${err.id}: ${err.error}`);
-      if (!(result.started ?? []).length) {
+      if ((result.created ?? []).length) {
+        toast(`Pinned ${result.created.length} on free ports in that checkout`);
+      }
+      if (!(result.started ?? []).length && !(result.created ?? []).length) {
         closeSheet();
         if (!addOpen) toggleAdd();
         $("#a-cwd").value = btn.dataset.path;

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { collectAlerts } from "./lib/attention";
 import { Control, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
@@ -13,7 +13,7 @@ import { Registry } from "./lib/registry";
 import { CrashWatch } from "./lib/restarts";
 import { suggestCommands } from "./lib/suggest";
 import type { Pinned, ProjectLink, RunningService, StartSpec, WorktreeInfo } from "./lib/types";
-import { createWorktree, openInEditor, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
+import { createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 export type Deps = {
   discover: () => Promise<RunningService[]>;
@@ -26,6 +26,7 @@ const json = (data: unknown, status = 200) => Response.json(data, { status });
 const fail = (message: string, status = 400) => json({ error: message }, status);
 const page = Bun.file(new URL("./public/index.html", import.meta.url));
 const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? homedir() + p.slice(1) : p);
+const resolved = async (p: string) => realpath(p).catch(() => resolve(p));
 
 function readEnvInput(body: Record<string, unknown>): Record<string, string> | undefined {
   if (body.env && typeof body.env === "object" && !Array.isArray(body.env)) {
@@ -122,6 +123,12 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         return new Response(file, {
           headers: { "content-type": pathname.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" },
         });
+      }
+      const font = /^\/fonts\/([A-Za-z0-9-]+\.woff2)$/.exec(pathname);
+      if (method === "GET" && font) {
+        const file = Bun.file(new URL(`./public/fonts/${font[1]}`, import.meta.url));
+        if (!(await file.exists())) return fail("not found", 404);
+        return new Response(file, { headers: { "content-type": "font/woff2", "cache-control": "public, max-age=31536000, immutable" } });
       }
 
       if (method === "GET" && pathname === "/api/services") {
@@ -369,19 +376,38 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       if (method === "POST" && pathname === "/api/worktrees/launch") {
         const { path } = await readBody(req);
         if (typeof path !== "string" || !path.trim()) return fail("path required");
-        const folder = expandHome(path.trim());
+        const folder = await resolved(expandHome(path.trim()));
+        const info = await stat(folder).catch(() => undefined);
+        if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
         const { services, pinned } = await snapshot();
-        const members = servicesInFolder(services, folder).filter((s) => s.kind === "dev" && !s.hidden && s.id);
+        let repo = folder;
+        try { repo = await resolved(await mainRepoOf(folder)); } catch { /* not a git checkout; start pins already in the folder */ }
+        const pins = await Promise.all(pinned.map(async (p) => ({ ...p, cwd: await resolved(p.cwd) })));
+        const plan = planWorktreeLaunch(folder, repo, pins, services.flatMap((s) => s.ports));
         const errors: { id: string; error: string }[] = [];
         const started: { id: string; pid: number }[] = [];
-        await Promise.all(members.map(async (s) => {
-          if (s.status === "running") return;
-          const spec = pinned.find((p) => p.id === s.id);
-          if (!spec) { errors.push({ id: s.id!, error: "not pinned" }); return; }
-          try { const pid = await control.start(spec); crashes.arm(s.id!); started.push({ id: s.id!, pid }); }
-          catch (e) { errors.push({ id: s.id!, error: e instanceof Error ? e.message : String(e) }); }
+        const created: Pinned[] = [];
+        for (const input of plan.create) {
+          const dest = await stat(input.cwd).catch(() => undefined);
+          if (!dest?.isDirectory()) {
+            errors.push({ id: input.name, error: `folder does not exist: ${input.cwd}` });
+            continue;
+          }
+          const pin = await registry.add(input);
+          created.push(pin);
+          plan.startIds.push(pin.id);
+        }
+        const pinnedNow = created.length ? await registry.load() : pinned;
+        await Promise.all(plan.startIds.map(async (id) => {
+          const svc = services.find((s) => s.id === id);
+          if (svc?.status === "running") return;
+          const spec = pinnedNow.find((p) => p.id === id);
+          if (!spec) { errors.push({ id, error: "not pinned" }); return; }
+          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
+          catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
-        return json({ started, errors, port: firstFreePort(services.flatMap((s) => s.ports)) });
+        const used = [...services.flatMap((s) => s.ports), ...created.map((p) => p.port)];
+        return json({ started, created, errors, port: firstFreePort(used) });
       }
 
       if (method === "POST" && pathname === "/api/worktrees/remove") {
@@ -397,10 +423,12 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       }
 
       if (method === "GET" && pathname === "/api/attention") {
-        const dir = url.searchParams.get("dir") || "~/Documents/Personal/Projects";
+        const dir = url.searchParams.get("dir") ?? "";
         const { services } = await snapshot();
         let worktrees: WorktreeInfo[] = [];
-        try { worktrees = (await scanWorktrees(dir, services)).worktrees; } catch { worktrees = []; }
+        if (dir.trim()) {
+          try { worktrees = (await scanWorktrees(dir, services)).worktrees; } catch { worktrees = []; }
+        }
         const lastErrors = new Map<string, string[]>();
         await Promise.all(services.filter((s) => s.hasLog && s.id && s.status === "stopped").map(async (s) => {
           try { lastErrors.set(s.id!, (await control.tailLog(s.id!, 40)).lines); } catch {}

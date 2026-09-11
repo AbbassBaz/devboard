@@ -2,12 +2,27 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isServerScript, parseComposeServices, parsePackageScripts, parseProcfile, portFromCommand, suggestCommands } from "../lib/suggest";
+import { isServerScript, parseComposeServices, parsePackageScripts, parseProcfile, portFromCommand, rewriteCommandPort, rewriteUrlPort, suggestCommands } from "../lib/suggest";
 
 describe("portFromCommand", () => {
   test("reads --port, PORT=, and :port", () => {
     expect(portFromCommand("next dev --port 3010")).toBe(3010);
     expect(portFromCommand("PORT=8787 bun run src/index.ts")).toBe(8787);
+  });
+});
+
+describe("rewriteCommandPort", () => {
+  test("replaces --port, -p, or PORT=, and otherwise prefixes PORT=", () => {
+    expect(rewriteCommandPort("next dev --port 3000", 3012)).toBe("next dev --port 3012");
+    expect(rewriteCommandPort("next dev -p 3000", 3012)).toBe("next dev -p 3012");
+    expect(rewriteCommandPort("PORT=3000 bun run --watch src/index.ts", 3012)).toBe("PORT=3012 bun run --watch src/index.ts");
+    expect(rewriteCommandPort("bun run --watch src/index.ts", 3012)).toBe("PORT=3012 bun run --watch src/index.ts");
+  });
+});
+
+describe("rewriteUrlPort", () => {
+  test("rewrites the host port and keeps the path", () => {
+    expect(rewriteUrlPort("http://127.0.0.1:3000/health", 3012)).toBe("http://127.0.0.1:3012/health");
   });
 });
 

@@ -4,8 +4,8 @@ import type { Pinned, RunningService } from "../lib/types";
 
 const docs: RunningService = {
   rootPid: 64672, pids: [64672, 64728, 64734], ports: [3010],
-  cwd: "/Users/abbassbaz/Desktop/Sadie/OnCoreDocs", command: "node /x/pnpm dev",
-  name: "oncore-docs", kind: "dev", uptime: "23-01:48:35", cpu: 0.2, memMb: 149,
+  cwd: "/Users/dev/Projects/docs-site", command: "node /x/pnpm dev",
+  name: "docs-site", kind: "dev", uptime: "23-01:48:35", cpu: 0.2, memMb: 149,
 };
 const backend: RunningService = { ...docs, rootPid: 51272, pids: [51272], ports: [8787], command: "node server/dist/main.js" };
 const cc: RunningService = {
@@ -13,7 +13,7 @@ const cc: RunningService = {
   name: "ControlCenter", kind: "system", uptime: "49-00:13:40", cpu: 0.5, memMb: 44,
 };
 const pinnedDocs: Pinned = { id: "docs-3010", name: "Docs", cwd: docs.cwd!, command: docs.command, port: 3010 };
-const pinnedApi: Pinned = { id: "core-api-3003", name: "core-api", cwd: "/Users/abbassbaz/Desktop/Sadie/CoreAgentsHub/apps/core-api", command: "bun run --watch src/index.ts", port: 3003 };
+const pinnedApi: Pinned = { id: "core-api-3003", name: "core-api", cwd: "/Users/dev/Projects/app/apps/api", command: "bun run --watch src/index.ts", port: 3003 };
 
 describe("matchPinned", () => {
   test("matches on cwd plus port, so two servers in one folder stay distinct", () => {
@@ -24,7 +24,7 @@ describe("matchPinned", () => {
 
 describe("logIdFor", () => {
   test("derives the same id a pin would get", () => {
-    expect(logIdFor(docs)).toBe("oncore-docs-3010");
+    expect(logIdFor(docs)).toBe("docs-site-3010");
   });
 });
 
@@ -38,7 +38,7 @@ describe("mergeServices", () => {
 
   test("unmatched running services get a derived id and pinned false", () => {
     const row = out.find((s) => s.rootPid === 51272)!;
-    expect(row).toMatchObject({ id: "oncore-docs-8787", pinned: false, status: "running" });
+    expect(row).toMatchObject({ id: "docs-site-8787", pinned: false, status: "running" });
   });
 
   test("pinned services with no running match appear as stopped, with hasLog from the callback", () => {
@@ -51,7 +51,7 @@ describe("mergeServices", () => {
   });
 
   test("ignored ids are flagged hidden, running or stopped", () => {
-    const rows = mergeServices([docs, cc], [pinnedApi], () => false, new Set(["oncore-docs-3010", "core-api-3003"]));
+    const rows = mergeServices([docs, cc], [pinnedApi], () => false, new Set(["docs-site-3010", "core-api-3003"]));
     expect(rows.find((s) => s.rootPid === 64672)!.hidden).toBe(true);
     expect(rows.find((s) => s.id === "core-api-3003")!.hidden).toBe(true);
     expect(rows.find((s) => s.rootPid === 683)!.hidden).toBe(false);

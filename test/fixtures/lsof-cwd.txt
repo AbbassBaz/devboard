@@ -3,7 +3,7 @@ fcwd
 n/opt/homebrew/var/db/redis
 p41727
 fcwd
-n/Users/abbassbaz/Desktop/Sadie/CoreAgentsHub/apps/core-proxy
+n/Users/dev/Projects/app/apps/proxy
 p64672
 fcwd
-n/Users/abbassbaz/Desktop/Sadie/OnCoreDocs
+n/Users/dev/Projects/docs-site

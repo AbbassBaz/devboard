@@ -79,7 +79,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 - Filter 28px, radius 5, bg `#16181c`, placeholder “Filter servers  /”. Name or port. `/` focuses it.
 - `+ Add` opens an inline form under the filter (bg `#1c1f24`): name, folder, command \| port (`1fr 80px`), Cancel / **Add** (accent fill, ink, 600). Folder blur → `GET /api/suggest`. Submit → `POST /api/pinned`. Extra fields (health, env, restart-on-crash) stay on the Edit sheet.
-- Group header (`10px 12px 4px`, 11px): uppercase 600 `.06em` `#aeb4bf` (project name, or “Other”) · mono `running/total` dim · project text buttons `start` / `stop` (hover `#23272e`, green / red) → `/api/projects/:id/start|stop`.
+- Group header (`10px 12px 4px`, 11px): uppercase 600 `.06em` `#aeb4bf` (project name, or “Other”) · mono `running/total` dim · localhost port links `:3000` and any saved project links · project text buttons `start` / `stop` (hover `#23272e`, green / red) → `/api/projects/:id/start|stop`.
 - Row: `10px 1fr auto auto`, gap 10, margin `0 6px`, padding `7px 8px 7px 10px`, radius 6. Selected `#242932`, hover `#23272e`. Click selects.
   - Dot 8px: running `#4fb477` + ring; busy `#d4a72c` pulse `.8s`; stopped `#3a3e46`.
   - Name 500 (`#8b919c` if stopped) + port link `:3003` → `http://localhost:PORT`.
