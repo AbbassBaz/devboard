@@ -2,7 +2,7 @@
 
 Applies to: `public/index.html`, `public/app.js`, `public/app.css`, `design.md`.
 
-Treat `design.md` as law for everything under `public/`.
+`design.md` is the current UI spec for everything under `public/`. Amend it in the same PR as a UI change and say why.
 
 - Keep the `44px / sidebar+log / 28px` shell. Do not revive the card board or tab bar.
 - Use the tokens in `design.md` exactly: colors, type, spacing, radii, heights, motion. No new palette or typeface.

@@ -26,7 +26,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-16 | Show readiness on the page | todo | Tier 2 — waiting |
 | F-17 | Mask secret-looking env values and gate `/api/env` | todo | Tier 2 — waiting |
 | F-18 | Validate hand-edited registry JSON and serialize writes | todo | Tier 2 — waiting |
-| F-19 | Reconcile AGENTS.md with the new direction and add CONTRIBUTING.md | todo | |
+| F-19 | Reconcile AGENTS.md with the new direction and add CONTRIBUTING.md | done | Loopback-only wording; design.md is the current spec and can be amended in-PR. CONTRIBUTING.md covers the four gotchas. |
 | F-20 | Refuse to retire a worktree while a server runs in it | todo | Tier 2 — waiting |
 | F-21 | Give saved services an identity that survives name collisions | todo | Tier 3 — waiting |
 | F-22 | CLI parity, `--json`, and a `doctor` command | todo | Tier 3 — waiting |

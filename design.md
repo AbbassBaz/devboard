@@ -1,6 +1,6 @@
 # Graphite workspace
 
-Standing UI rules for `public/index.html`, `public/app.js`, and `public/app.css`. Colors, type, spacing, radii, and states are final — match them, do not restyle. Vanilla JS + Bun, no frameworks. No server changes for UI work; wire actions to the existing `/api/*` endpoints.
+Standing UI rules for `public/index.html`, `public/app.js`, and `public/app.css`. Match the tokens, shell, and behaviour here; if they need to change, amend this file in the same PR and say why. Vanilla JS + Bun, no frameworks. No server changes for UI work; wire actions to the existing `/api/*` endpoints.
 
 ## Principles
 
