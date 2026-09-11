@@ -1,19 +1,23 @@
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
+import { collectAlerts } from "./lib/attention";
 import { Control, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
-import { collectAlerts } from "./lib/attention";
+import { parseEnvText, readProcessEnv } from "./lib/env";
 import { applyReadiness, firstFreePort } from "./lib/health";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
 import { parseLinks, projectViews, pruneProjectMembers, servicesInFolder } from "./lib/projects";
 import { Registry } from "./lib/registry";
-import type { ProjectLink, RunningService, StartSpec, WorktreeInfo } from "./lib/types";
+import { CrashWatch } from "./lib/restarts";
+import { suggestCommands } from "./lib/suggest";
+import type { Pinned, ProjectLink, RunningService, StartSpec, WorktreeInfo } from "./lib/types";
 import { createWorktree, openInEditor, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 export type Deps = {
   discover: () => Promise<RunningService[]>;
   registry: Registry;
   control: Control;
+  crashes?: CrashWatch;
 };
 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
@@ -21,8 +25,24 @@ const fail = (message: string, status = 400) => json({ error: message }, status)
 const page = Bun.file(new URL("./public/index.html", import.meta.url));
 const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? homedir() + p.slice(1) : p);
 
+function readEnvInput(body: Record<string, unknown>): Record<string, string> | undefined {
+  if (body.env && typeof body.env === "object" && !Array.isArray(body.env)) {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(body.env as Record<string, unknown>)) {
+      if (typeof v === "string") env[k] = v;
+    }
+    return Object.keys(env).length ? env : undefined;
+  }
+  if (typeof body.envText === "string" && body.envText.trim()) {
+    const env = parseEnvText(body.envText);
+    return Object.keys(env).length ? env : undefined;
+  }
+  return undefined;
+}
+
 export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   const { registry, control } = deps;
+  const crashes = deps.crashes ?? new CrashWatch(control);
 
   const findRunning = async (rootPid: number) => (await deps.discover()).find((s) => s.rootPid === rootPid);
 
@@ -94,11 +114,19 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       if (method === "GET" && pathname === "/") {
         return new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
       }
+      if (method === "GET" && (pathname === "/app.css" || pathname === "/app.js")) {
+        const file = Bun.file(new URL(`./public${pathname}`, import.meta.url));
+        if (!(await file.exists())) return fail("not found", 404);
+        return new Response(file, {
+          headers: { "content-type": pathname.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" },
+        });
+      }
 
       if (method === "GET" && pathname === "/api/services") {
         const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
         let services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
         services = await applyReadiness(services, pinned);
+        await crashes.tick(services, pinned);
         const known = new Set(services.map((s) => s.id).filter((id): id is string => !!id));
         const stored = await registry.loadProjects();
         const projects = pruneProjectMembers(stored, known);
@@ -116,6 +144,8 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (typeof rootPid !== "number") return fail("rootPid required");
         const svc = await findRunning(rootPid);
         if (!svc) return fail("no running service with that rootPid", 404);
+        const pinned = matchPinned(svc, await registry.load());
+        crashes.disarm(pinned?.id ?? logIdFor(svc));
         return json(await killTree(svc.pids));
       }
 
@@ -126,7 +156,9 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (!pinned) return fail("no pinned service with that id", 404);
         const alreadyRunning = (await deps.discover()).some((s) => matchPinned(s, [pinned]));
         if (alreadyRunning) return fail("already running", 409);
-        return json({ pid: await control.start(pinned) });
+        const pid = await control.start(pinned);
+        crashes.arm(pinned.id);
+        return json({ pid });
       }
 
       if (method === "POST" && pathname === "/api/restart") {
@@ -150,12 +182,15 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
           return fail("rootPid or id required");
         }
         const result = pids.length ? await killTree(pids) : { killed: [], forced: [] };
-        return json({ ...result, pid: await control.start(spec) });
+        const pid = await control.start(spec);
+        crashes.arm(spec.id);
+        return json({ ...result, pid });
       }
 
       const editPinned = /^\/api\/pinned\/([^/]+)$/.exec(pathname);
       if ((method === "POST" && pathname === "/api/pinned") || (method === "PUT" && editPinned)) {
-        const { name, cwd, command, port, healthUrl } = await readBody(req);
+        const body = await readBody(req);
+        const { name, cwd, command, port, healthUrl } = body;
         if (typeof name !== "string" || !name.trim()) return fail("name required");
         if (typeof cwd !== "string" || !cwd.trim()) return fail("folder required");
         if (typeof command !== "string" || !command.trim()) return fail("command required");
@@ -164,9 +199,12 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const folder = expandHome(cwd.trim());
         const info = await stat(folder).catch(() => undefined);
         if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
-        const input = {
+        const env = readEnvInput(body);
+        const input: Omit<Pinned, "id"> = {
           name: name.trim(), cwd: folder, command: command.trim(), port: portNum,
           healthUrl: typeof healthUrl === "string" && healthUrl.trim() ? healthUrl.trim() : undefined,
+          ...(env ? { env } : {}),
+          ...(body.restartOnCrash === true ? { restartOnCrash: true } : {}),
         };
         if (editPinned) {
           const pinned = await registry.replace(decodeURIComponent(editPinned[1]), input);
@@ -275,7 +313,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
           if (!svc || svc.status === "running") return;
           const spec = pinned.find((p) => p.id === id);
           if (!spec) { errors.push({ id, error: "not pinned" }); return; }
-          try { started.push({ id, pid: await control.start(spec) }); }
+          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
           catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
         return json({ started, errors });
@@ -292,6 +330,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
           const svc = services.find((s) => s.id === id);
           if (!svc || svc.status !== "running" || !svc.rootPid || !svc.pids) return;
           try {
+            crashes.disarm(id);
             await killTree(svc.pids);
             stopped.push(id);
           } catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
@@ -337,7 +376,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
           if (s.status === "running") return;
           const spec = pinned.find((p) => p.id === s.id);
           if (!spec) { errors.push({ id: s.id!, error: "not pinned" }); return; }
-          try { started.push({ id: s.id!, pid: await control.start(spec) }); }
+          try { const pid = await control.start(spec); crashes.arm(s.id!); started.push({ id: s.id!, pid }); }
           catch (e) { errors.push({ id: s.id!, error: e instanceof Error ? e.message : String(e) }); }
         }));
         return json({ started, errors, port: firstFreePort(services.flatMap((s) => s.ports)) });
@@ -402,13 +441,25 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
           if (svc?.status === "running") return;
           const spec = pinned.find((p) => p.id === id);
           if (!spec) { errors.push({ id, error: "not pinned" }); return; }
-          try { started.push({ id, pid: await control.start(spec) }); }
+          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
           catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
         if (preset.openEditor && preset.worktree) {
           try { await openInEditor(preset.worktree); } catch (e) { errors.push({ id: "editor", error: e instanceof Error ? e.message : String(e) }); }
         }
         return json({ started, errors, urls: preset.urls });
+      }
+
+      if (method === "GET" && pathname === "/api/suggest") {
+        const dir = url.searchParams.get("dir") ?? "";
+        if (!dir.trim()) return fail("dir required");
+        return json({ suggestions: await suggestCommands(expandHome(dir.trim())) });
+      }
+
+      if (method === "GET" && pathname === "/api/env") {
+        const pid = Number(url.searchParams.get("pid"));
+        if (!Number.isInteger(pid) || pid <= 1) return fail("pid required");
+        return json({ env: await readProcessEnv(pid) });
       }
 
       if (method === "POST" && pathname === "/api/ports/next") {
@@ -440,10 +491,21 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
 
 if (import.meta.main) {
   const port = Number(process.env.PORT ?? 4242);
+  const registry = new Registry();
+  const control = new Control();
+  const crashes = new CrashWatch(control);
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port,
-    fetch: createHandler({ discover: () => realDiscover(), registry: new Registry(), control: new Control() }),
+    fetch: createHandler({ discover: () => realDiscover(), registry, control, crashes }),
   });
+  setInterval(async () => {
+    try {
+      const [running, pinned, ignored] = await Promise.all([realDiscover(), registry.load(), registry.loadIgnored()]);
+      const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
+      const restarted = await crashes.tick(services, pinned);
+      if (restarted.length) console.log(`${new Date().toISOString()} crash-restart ${restarted.join(",")}`);
+    } catch {}
+  }, 3000);
   console.log(`devboard → http://127.0.0.1:${server.port}`);
 }

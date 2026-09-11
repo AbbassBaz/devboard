@@ -19,8 +19,7 @@ export function healthUrlFor(s: Service, pinned: Pinned[]): string | undefined {
   if (s.healthUrl) return s.healthUrl;
   const p = pinned.find((x) => x.id === s.id);
   if (p?.healthUrl) return p.healthUrl;
-  if (s.kind !== "dev" || s.status !== "running" || !s.ports[0]) return undefined;
-  return `http://127.0.0.1:${s.ports[0]}/`;
+  return undefined;
 }
 
 export async function applyReadiness(services: Service[], pinned: Pinned[]): Promise<Service[]> {

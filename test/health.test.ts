@@ -20,11 +20,11 @@ describe("firstFreePort", () => {
 });
 
 describe("healthUrlFor", () => {
-  test("prefers an explicit URL, then the first listening port", () => {
+  test("uses only an explicit health URL, never a guessed /", () => {
     expect(healthUrlFor({ ...running([3000]), healthUrl: "http://127.0.0.1:3000/ready" }, [])).toBe("http://127.0.0.1:3000/ready");
     const pinned: Pinned[] = [{ id: "web-3000", name: "web", cwd: "/tmp", command: "true", port: 3000, healthUrl: "http://127.0.0.1:3000/health" }];
     expect(healthUrlFor(running([3000]), pinned)).toBe("http://127.0.0.1:3000/health");
-    expect(healthUrlFor(running([8787]), [])).toBe("http://127.0.0.1:8787/");
+    expect(healthUrlFor(running([8787]), [])).toBeUndefined();
     expect(healthUrlFor(stopped, [])).toBeUndefined();
   });
 });
@@ -68,5 +68,11 @@ describe("probe and applyReadiness", () => {
     expect(rows[0].readiness).toBe("stopped");
     expect(rows[1].readiness).toBe("ready");
     expect(rows[2]).toMatchObject({ readiness: "unhealthy", health: { ok: false, status: 503 } });
+  });
+
+  test("running without a health URL stays ready and is not probed", async () => {
+    const rows = await applyReadiness([running([8787], { id: "api-8787", name: "api" })], []);
+    expect(rows[0]).toMatchObject({ readiness: "ready" });
+    expect(rows[0].health).toBeUndefined();
   });
 });

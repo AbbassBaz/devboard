@@ -39,6 +39,8 @@ export function mergeServices(
       hidden: ignored.has(id),
       readiness: "ready",
       ...(p?.healthUrl ? { healthUrl: p.healthUrl } : {}),
+      ...(p?.env && Object.keys(p.env).length ? { env: p.env } : {}),
+      ...(p?.restartOnCrash ? { restartOnCrash: true } : {}),
     };
   });
   for (const p of pinned) {
@@ -56,6 +58,8 @@ export function mergeServices(
       hidden: ignored.has(p.id),
       readiness: "stopped",
       ...(p.healthUrl ? { healthUrl: p.healthUrl } : {}),
+      ...(p.env && Object.keys(p.env).length ? { env: p.env } : {}),
+      ...(p.restartOnCrash ? { restartOnCrash: true } : {}),
     });
   }
   return rows;

@@ -2,8 +2,12 @@ import { spawn } from "node:child_process";
 import { closeSync, existsSync, fstatSync, openSync, writeSync } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { mergeEnv } from "./env";
 import { DEVBOARD_HOME } from "./registry";
 import type { StartSpec } from "./types";
+
+export const LOG_MAX_BYTES = 5 * 1024 * 1024;
+export const LOG_KEEP_BYTES = 2 * 1024 * 1024;
 
 export function isAlive(pid: number): boolean {
   try {
@@ -54,10 +58,23 @@ export class Control {
     return existsSync(this.logPath(id));
   }
 
+  async rotateIfNeeded(id: string, maxBytes = LOG_MAX_BYTES, keepBytes = LOG_KEEP_BYTES): Promise<boolean> {
+    const path = this.logPath(id);
+    const info = await stat(path).catch(() => undefined);
+    if (!info || info.size <= maxBytes) return false;
+    const from = Math.max(0, info.size - keepBytes);
+    let text = await Bun.file(path).slice(from, info.size).text();
+    const nl = text.indexOf("\n");
+    if (nl >= 0) text = text.slice(nl + 1);
+    await Bun.write(path, `===== ${new Date().toISOString()} rotated, kept last ${(text.length / 1024).toFixed(0)} KB =====\n${text}`);
+    return true;
+  }
+
   async start(spec: StartSpec): Promise<number> {
     const cwdInfo = await stat(spec.cwd).catch(() => undefined);
     if (!cwdInfo?.isDirectory()) throw new Error(`working directory does not exist: ${spec.cwd}`);
     await mkdir(this.logDir, { recursive: true });
+    await this.rotateIfNeeded(spec.id);
     const fd = openSync(this.logPath(spec.id), "a");
     try {
       const separator = fstatSync(fd).size > 0 ? "\n" : "";
@@ -66,7 +83,7 @@ export class Control {
         cwd: spec.cwd,
         detached: true, // own session and process group: survives devboard exit and Ctrl-C
         stdio: ["ignore", fd, fd],
-        env: process.env,
+        env: mergeEnv(process.env, spec.env),
       });
       child.on("error", () => {});
       child.unref();

@@ -64,4 +64,10 @@ describe("mergeServices", () => {
   test("row count is running plus unmatched pinned", () => {
     expect(out).toHaveLength(4);
   });
+
+  test("pinned env and restartOnCrash copy onto the row", () => {
+    const pinned: Pinned = { ...pinnedApi, env: { FOO: "1" }, restartOnCrash: true };
+    const row = mergeServices([], [pinned], () => false)[0];
+    expect(row).toMatchObject({ env: { FOO: "1" }, restartOnCrash: true });
+  });
 });

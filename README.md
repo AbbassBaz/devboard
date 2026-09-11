@@ -14,9 +14,17 @@ start, and read logs.
 Start it from your normal zsh so that services launched from the page inherit
 the same PATH (fnm's node, pnpm, bun).
 
-`PORT` overrides the port. `DEVBOARD_HOME` overrides `~/.devboard`, where
-`services.json` (pinned list), `projects.json`, `presets.json`, `ignored.json`,
-and `logs/<id>.log` live.
+`PORT` overrides the port. `DEVBOARD_URL` is the board the CLI talks to
+(default `http://127.0.0.1:4242`). `DEVBOARD_HOME` overrides `~/.devboard`,
+where `services.json` (pinned list), `projects.json`, `presets.json`,
+`ignored.json`, and `logs/<id>.log` live.
+
+    bun run devboard --            # list
+    bun run devboard -- start api
+    bun run devboard -- logs web -f
+    bun run devboard -- stop-all
+
+Or `bun link` / `bun install --global` so `devboard` is on your PATH.
 
 ## What it does
 
@@ -33,14 +41,24 @@ and `logs/<id>.log` live.
 - **Start / Restart.** Runs the saved command in its folder via `/bin/sh -c`,
   detached in its own process group, output appended to
   `~/.devboard/logs/<id>.log`. Closing devboard does not stop what it started.
+  Optional env overrides on the card are merged into the process environment.
+  Optional **restart on crash** (5 tries, 1→2→4→8→16s, cap 30s) relaunches a
+  stopped card whose last log looks like an error. Stop / Kill disarms it so
+  a clean shutdown does not bounce back.
 - **Logs.** Last 4000 lines, refreshed every 2 seconds, in a sidebar. Drag the left
   edge to resize. Search with `/`, jump matches with Enter, filter **ERR / WRN / INF**,
   wrap or unwrap long lines (click a row to expand one), Follow pauses when you scroll
   up. Copy or save the filtered view. **Clear** truncates the file. ANSI colors stay.
   A service that devboard did not start has no log yet; the pane says so and offers to
-  restart it under devboard.
-- **Readiness.** Running cards are probed on each refresh. 2xx/3xx on the optional
-  health URL (or `http://127.0.0.1:<port>/`) is ready; anything else is unhealthy.
+  restart it under devboard. Each file is capped at 5 MB; on start (and on rotate)
+  only the last 2 MB is kept.
+- **Env.** Each card has an Env view: saved overrides plus the live `ps` environment
+  of a running process. Edit the card to change overrides (`KEY=value` lines).
+- **Readiness.** Running cards with an explicit health URL are probed on each
+  refresh. 2xx/3xx is ready; anything else is unhealthy. No URL means ready —
+  the board does not hit `/` just to guess, so noisy dev servers stay quiet.
+- **CLI.** `devboard` (or `bun run devboard --`) lists the board and can
+  `start`, `stop`, `restart`, `logs [-f]`, `start-all`, and `stop-all`.
 - **Hide.** Moves a card into the collapsed Hidden list below the board, for things like
   editor helpers that happen to listen on a port. Show brings it back. Stored in
   `~/.devboard/ignored.json`.
@@ -48,7 +66,10 @@ and `logs/<id>.log` live.
   is off. Stop all asks first, then switches off every running dev server, pinning the
   unsaved ones so they can be switched back on.
 - **Add server.** The button in the header opens a form for name, folder, command and
-  port. The folder must exist. The new card starts switched off; switch it on to run it.
+  port. Leaving the folder reads `package.json` scripts, Compose services, and a
+  Procfile and offers them as commands. Click a port on a card to open
+  `http://127.0.0.1:<port>`. The folder must exist. The new card starts switched
+  off; switch it on to run it.
 - **Projects.** + Project groups servers you start together. Name it, optionally point
   at a folder and tick “Add everything from this folder” to pull in every card under
   that path. Start project / Stop project switch the whole group at once. Combined
@@ -95,9 +116,11 @@ below the cards with only a Kill action.
   launchd or Homebrew services restart it. Use `brew services stop <name>`.
 - If a pinned service comes up on a different port than the one saved, it
   shows as stopped next to a new unpinned running row.
-- Log files are never rotated. Deleting one is safe.
+- Log files rotate at 5 MB (last 2 MB kept). Deleting one is still safe.
+- Health probes run only when you set a health URL. A server that logs every
+  request to `/` will not see board traffic unless you ask for it.
 - Binds to 127.0.0.1 only. Do not change that: the API kills processes and
-  runs saved shell commands.
+  runs saved shell commands. There is no remote or multi-machine mode.
 
 ## Smoke checklist
 

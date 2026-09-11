@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "devboard": "./bin/devboard.ts"
+  },
   "scripts": {
     "start": "bun run server.ts",
     "dev": "bun --watch server.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "devboard": "bun run bin/devboard.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2"

@@ -104,6 +104,24 @@ describe("Control", () => {
     expect(tail.path).toBe(path);
   });
 
+  test("start merges env overrides into the child", async () => {
+    const pid = await control.start({ id: "env-test", cwd: home, command: "printf %s \"$DEVBOARD_FOO\"", env: { DEVBOARD_FOO: "from-card" } });
+    await waitUntilDead(pid);
+    expect((await control.tailLog("env-test")).lines.at(-1)).toBe("from-card");
+  });
+
+  test("rotateIfNeeded keeps the last chunk once a log grows past the cap", async () => {
+    mkdirSync(control.logDir, { recursive: true });
+    const path = control.logPath("huge");
+    writeFileSync(path, "x".repeat(500) + "\nUNIQUE-TAIL-LINE\n");
+    expect(await control.rotateIfNeeded("huge", 100, 40)).toBe(true);
+    const text = await Bun.file(path).text();
+    expect(text).toContain("rotated");
+    expect(text).toContain("UNIQUE-TAIL-LINE");
+    expect(text.length).toBeLessThan(200);
+    expect(await control.rotateIfNeeded("huge", 10_000, 40)).toBe(false);
+  });
+
   test("clearLog truncates to a single header line", async () => {
     mkdirSync(control.logDir, { recursive: true });
     writeFileSync(control.logPath("wipe"), "old noise\nmore\n");

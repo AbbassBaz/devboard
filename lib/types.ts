@@ -33,9 +33,11 @@ export type Pinned = {
   command: string;
   port: number;
   healthUrl?: string;
+  env?: Record<string, string>;
+  restartOnCrash?: boolean;
 };
 
-export type StartSpec = { id: string; cwd: string; command: string };
+export type StartSpec = { id: string; cwd: string; command: string; env?: Record<string, string> };
 
 export type Service = {
   id?: string;
@@ -56,6 +58,8 @@ export type Service = {
   readiness: Readiness;
   healthUrl?: string;
   health?: { ok: boolean; status?: number; ms: number; error?: string };
+  env?: Record<string, string>;
+  restartOnCrash?: boolean;
 };
 
 export type ProjectLink = { label: string; url: string };

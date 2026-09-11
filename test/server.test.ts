@@ -42,9 +42,21 @@ describe("GET /", () => {
     const html = await res.text();
     expect(html).toContain("<title>devboard</title>");
     expect(html).toContain('id="dev"');
-    expect(html).toContain("/api/services");
     expect(html).toContain('id="worktreesBtn"');
     expect(html).toContain('id="projectBtn"');
+    expect(html).toContain("/app.js");
+    expect(html).toContain("/app.css");
+  });
+
+  test("serves the split stylesheet and script", async () => {
+    const css = await call("GET", "/app.css");
+    expect(css.status).toBe(200);
+    expect(css.headers.get("content-type")).toContain("text/css");
+    expect(await css.text()).toContain("--bg:");
+    const js = await call("GET", "/app.js");
+    expect(js.status).toBe(200);
+    expect(js.headers.get("content-type")).toContain("javascript");
+    expect(await js.text()).toContain("/api/services");
   });
 });
 
@@ -305,6 +317,40 @@ describe("healthUrl, ports, presets and attention", () => {
     expect(body.urls).toEqual(["http://127.0.0.1:39996"]);
     spawned.push(body.started[0].pid);
     expect((await call("DELETE", "/api/presets/frontend-only")).status).toBe(200);
+  });
+
+  test("POST /api/pinned keeps env overrides and restart-on-crash", async () => {
+    running = [];
+    const res = await call("POST", "/api/pinned", {
+      name: "Envful", cwd: home, command: "true", port: 39997,
+      envText: "DATABASE_URL=postgres://x\n# skip\nNAME=\"core api\"",
+      restartOnCrash: true,
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).pinned).toMatchObject({
+      env: { DATABASE_URL: "postgres://x", NAME: "core api" },
+      restartOnCrash: true,
+    });
+    await registry.unpin("envful-39997");
+  });
+
+  test("GET /api/suggest reads package scripts from a folder", async () => {
+    const dir = join(home, "sug");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { dev: "vite --port 5173" } }));
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "");
+    const res = await call("GET", `/api/suggest?dir=${encodeURIComponent(dir)}`);
+    expect(res.status).toBe(200);
+    expect((await res.json()).suggestions[0]).toMatchObject({ command: "pnpm dev", port: 5173 });
+    expect((await call("GET", "/api/suggest")).status).toBe(400);
+  });
+
+  test("GET /api/env reads the current process environment", async () => {
+    const res = await call("GET", `/api/env?pid=${process.pid}`);
+    expect(res.status).toBe(200);
+    const { env } = await res.json();
+    expect(env.HOME || env.PATH).toBeString();
+    expect((await call("GET", "/api/env")).status).toBe(400);
   });
 
   test("GET /api/attention reports a port conflict", async () => {
