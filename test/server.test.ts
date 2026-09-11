@@ -211,6 +211,22 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     expect((await call("DELETE", "/api/logs/nothing-here")).status).toBe(404);
   });
 
+  test("GET /api/logs/:id?from= follows by byte offset and resets after clear", async () => {
+    mkdirSync(control.logDir, { recursive: true });
+    const path = control.logPath("follow-1");
+    writeFileSync(path, Array.from({ length: 150 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
+    const first = await (await call("GET", "/api/logs/follow-1?from=0")).json();
+    expect(first.lines).toHaveLength(150);
+    writeFileSync(path, Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n") + "\nsame\nsame\n");
+    const second = await (await call("GET", `/api/logs/follow-1?from=${first.next}`)).json();
+    expect(second.lines[0]).toBe("line 151");
+    expect(second.lines.slice(-2)).toEqual(["same", "same"]);
+    expect((await call("DELETE", "/api/logs/follow-1")).status).toBe(200);
+    const after = await (await call("GET", `/api/logs/follow-1?from=${second.next}`)).json();
+    expect(after.reset).toBe(true);
+    expect(after.lines.some((l: string) => l.includes("cleared"))).toBe(true);
+  });
+
   test("log ids cannot escape the log directory", async () => {
     const outside = join(home, "..", "outside.log");
     writeFileSync(outside, "leave me alone\n");

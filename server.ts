@@ -536,6 +536,12 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const id = decodeURIComponent(logs[1]);
         if (!isValidLogId(id)) return fail("invalid log id", 400);
         if (!control.hasLog(id)) return fail("no log for that id", 404);
+        const fromRaw = url.searchParams.get("from");
+        if (fromRaw != null) {
+          const from = Number(fromRaw);
+          if (!Number.isFinite(from) || from < 0) return fail("from must be a byte offset");
+          return json(await control.tailLog(id, 200, from));
+        }
         const requested = Number(url.searchParams.get("lines") ?? 200);
         const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 5000) : 200;
         return json(await control.tailLog(id, lines));

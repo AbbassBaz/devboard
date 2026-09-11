@@ -137,12 +137,15 @@ try {
     const out = await api("POST", "/api/restart", { id });
     console.log(`restarted ${id} pid ${out.pid}`);
   } else if (cmd === "logs" && id) {
-    let last = 0;
+    let from = 0;
+    let first = true;
     const once = async () => {
-      const data = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=200`) as { lines: string[] };
-      const lines = data.lines.slice(last);
-      last = data.lines.length;
-      if (lines.length) console.log(lines.join("\n"));
+      const q = first ? "lines=200" : `from=${from}`;
+      const data = await api("GET", `/api/logs/${encodeURIComponent(id)}?${q}`) as { lines: string[]; size: number; next?: number; reset?: boolean };
+      if (data.reset) console.log("--- log reset ---");
+      if (data.lines.length) console.log(data.lines.join("\n"));
+      from = data.next ?? data.size;
+      first = false;
     };
     await once();
     if (follow) {

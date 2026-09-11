@@ -133,6 +133,37 @@ describe("Control", () => {
     await expect(control.clearLog("missing")).rejects.toThrow("no log");
   });
 
+  test("tailLog from a byte offset returns each new line once, including duplicates", async () => {
+    mkdirSync(control.logDir, { recursive: true });
+    const path = control.logPath("follow");
+    const batch1 = Array.from({ length: 150 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+    writeFileSync(path, batch1);
+    const first = await control.tailLog("follow", 200, 0);
+    expect(first.lines).toHaveLength(150);
+    expect(first.lines[0]).toBe("line 1");
+    expect(first.reset).toBeUndefined();
+    const batch2 = Array.from({ length: 150 }, (_, i) => `line ${i + 151}`).join("\n") + "\nsame\nsame\n";
+    writeFileSync(path, batch1 + batch2);
+    const second = await control.tailLog("follow", 200, first.next);
+    expect(second.lines).toHaveLength(152);
+    expect(second.lines[0]).toBe("line 151");
+    expect(second.lines.slice(-2)).toEqual(["same", "same"]);
+    writeFileSync(path, batch1 + batch2 + "partial");
+    const held = await control.tailLog("follow", 200, second.next);
+    expect(held.lines).toEqual([]);
+    expect(held.next).toBe(second.next);
+  });
+
+  test("tailLog from a stale offset reports reset after the file shrinks", async () => {
+    mkdirSync(control.logDir, { recursive: true });
+    writeFileSync(control.logPath("reset-me"), Array.from({ length: 80 }, (_, i) => `old ${i}`).join("\n") + "\n");
+    const first = await control.tailLog("reset-me", 200, 0);
+    await control.clearLog("reset-me");
+    const again = await control.tailLog("reset-me", 200, first.next);
+    expect(again.reset).toBe(true);
+    expect(again.lines.some((l) => l.includes("cleared"))).toBe(true);
+  });
+
   test("logPath rejects ids that could leave the log directory", () => {
     expect(isValidLogId("echo-1")).toBe(true);
     expect(isValidLogId("devboard-3999")).toBe(true);

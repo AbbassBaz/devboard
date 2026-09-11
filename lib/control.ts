@@ -124,13 +124,26 @@ export class Control {
     return { path, size };
   }
 
-  async tailLog(id: string, lines = 200): Promise<{ lines: string[]; path: string; size: number }> {
+  async tailLog(id: string, lines = 200, from?: number): Promise<{ lines: string[]; path: string; size: number; reset?: boolean; next: number }> {
     const path = this.logPath(id);
     const { size } = await stat(path);
-    const from = Math.max(0, size - 256 * 1024);
-    const text = await Bun.file(path).slice(from, size).text();
+    if (from != null) {
+      if (size < from) {
+        const text = await Bun.file(path).text();
+        const all = text.split("\n");
+        if (all.at(-1) === "") all.pop();
+        return { lines: all, path, size, reset: true, next: size };
+      }
+      const text = await Bun.file(path).slice(from, size).text();
+      const lastNl = text.lastIndexOf("\n");
+      const complete = lastNl >= 0 ? text.slice(0, lastNl) : "";
+      const linesOut = complete.length ? complete.split("\n") : [];
+      return { lines: linesOut, path, size, next: from + (lastNl >= 0 ? lastNl + 1 : 0) };
+    }
+    const start = Math.max(0, size - 256 * 1024);
+    const text = await Bun.file(path).slice(start, size).text();
     const all = text.split("\n");
     if (all.at(-1) === "") all.pop();
-    return { lines: all.slice(-lines), path, size };
+    return { lines: all.slice(-lines), path, size, next: size };
   }
 }
