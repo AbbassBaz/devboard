@@ -590,6 +590,32 @@ describe("tracked process status", () => {
     expect(body.services.find((s: Service) => s.id === "boom-39882")?.crash).toEqual({ tries: 5, gaveUp: true });
   });
 
+  test("GET /api/services reuses a cached scan until a mutation", async () => {
+    let scans = 0;
+    const cacheHome = realpathSync(mkdtempSync(join(tmpdir(), "devboard-cache-")));
+    let live: RunningService[] = [docs];
+    const cacheHandle = createHandler({
+      discover: async () => { scans += 1; return live; },
+      registry: new Registry(cacheHome),
+      control: new Control(cacheHome),
+      allowedHosts: ["devboard.test"],
+      cacheMs: 30_000,
+    });
+    const get = () => cacheHandle(new Request("http://devboard.test/api/services"));
+    expect((await (await get()).json()).services.some((s: Service) => s.rootPid === 64672)).toBe(true);
+    live = [];
+    expect((await (await get()).json()).services.some((s: Service) => s.rootPid === 64672)).toBe(true);
+    expect(scans).toBe(1);
+    await cacheHandle(new Request("http://devboard.test/api/ignore", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "docs-site-3010" }),
+    }));
+    expect((await (await get()).json()).services.some((s: Service) => s.rootPid === 64672)).toBe(false);
+    expect(scans).toBe(2);
+    rmSync(cacheHome, { recursive: true, force: true });
+  });
+
   test("repeated GET /api/services writes no registry file", async () => {
     const quietHome = realpathSync(mkdtempSync(join(tmpdir(), "devboard-quiet-")));
     const quietRegistry = new Registry(quietHome);

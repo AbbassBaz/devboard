@@ -18,12 +18,24 @@ import { createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStal
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
 
+export type BoardSnapshot = {
+  running: RunningService[];
+  pinned: Pinned[];
+  services: Service[];
+};
+
 export type Deps = {
   discover: () => Promise<RunningService[]>;
   registry: Registry;
   control: Control;
   crashes?: CrashWatch;
   allowedHosts?: string[];
+  snapshot?: () => Promise<BoardSnapshot>;
+  cacheMs?: number;
+};
+
+export type BoardHandler = ((req: Request) => Promise<Response>) & {
+  refreshSnapshot: () => Promise<BoardSnapshot>;
 };
 
 function hostnameOf(value: string): string | null {
@@ -59,19 +71,36 @@ function readEnvInput(body: Record<string, unknown>): Record<string, string> | u
   return undefined;
 }
 
-export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
+export function createHandler(deps: Deps): BoardHandler {
   const { registry, control } = deps;
   const crashes = deps.crashes ?? new CrashWatch(control);
+  const cacheMs = deps.cacheMs ?? 0;
 
   const findRunning = async (rootPid: number) => (await deps.discover()).find((s) => s.rootPid === rootPid);
 
-  const snapshot = async () => {
+  const buildSnapshot = deps.snapshot ?? (async (): Promise<BoardSnapshot> => {
     await control.hydrate();
     control.reconcile();
     const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
     const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored, control.listTracked());
     return { running, pinned, services };
+  });
+
+  let cached: { at: number; data: BoardSnapshot } | null = null;
+  let inflight: Promise<BoardSnapshot> | null = null;
+  const refreshSnapshot = async () => {
+    inflight = buildSnapshot().then((data) => {
+      cached = { at: Date.now(), data };
+      return data;
+    }).finally(() => { inflight = null; });
+    return inflight;
   };
+  const snapshot = async () => {
+    if (inflight) return inflight;
+    if (cached && Date.now() - cached.at < cacheMs) return cached.data;
+    return refreshSnapshot();
+  };
+  const invalidate = () => { cached = null; };
 
   const withCrash = (services: Service[]) =>
     services.map((s) => {
@@ -140,7 +169,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     }
   };
 
-  return async function handle(req: Request): Promise<Response> {
+  const handle = async function handle(req: Request): Promise<Response> {
     const extra = deps.allowedHosts ?? [];
     const urlHost = new URL(req.url).hostname;
     if (!isAllowedHost(urlHost, extra)) return fail("forbidden", 403);
@@ -161,12 +190,15 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
 
     const res = await route(req);
     const isMutation = req.method !== "GET";
+    if (isMutation) invalidate();
     if (isMutation || res.status >= 400) {
       const path = new URL(req.url).pathname;
       if (path !== "/favicon.ico") console.log(`${new Date().toISOString()} ${req.method} ${path} -> ${res.status}${res.status >= 400 ? " " + (await res.clone().text()).slice(0, 200) : ""}`);
     }
     return res;
-  };
+  } as BoardHandler;
+  handle.refreshSnapshot = refreshSnapshot;
+  return handle;
 
   async function route(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -596,17 +628,15 @@ if (import.meta.main) {
   const registry = new Registry();
   const control = new Control();
   const crashes = new CrashWatch(control);
+  const fetch = createHandler({ discover: () => realDiscover(), registry, control, crashes, cacheMs: 3000 });
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port,
-    fetch: createHandler({ discover: () => realDiscover(), registry, control, crashes }),
+    fetch,
   });
   setInterval(async () => {
     try {
-      await control.hydrate();
-      control.reconcile();
-      const [running, pinned, ignored] = await Promise.all([realDiscover(), registry.load(), registry.loadIgnored()]);
-      const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored, control.listTracked());
+      const { services, pinned } = await fetch.refreshSnapshot();
       const logIds = services.filter((s) => s.id && s.hasLog && (s.status === "running" || s.status === "starting")).map((s) => s.id!);
       await control.rotateRunning(logIds);
       const restarted = await crashes.tick(services, pinned);

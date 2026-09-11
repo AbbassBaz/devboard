@@ -22,7 +22,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-12 | Adopt a running row when the port moved | done | Fallback in `matchPinned` when cwd + port-stripped command is unique. Saved port is not rewritten. |
 | F-13 | Make CLI `stop-all` pin unsaved rows first, like the page | done | Pins unpinned running `dev` rows before kill; per-row errors print and continue. |
 | F-14 | Fix `devboard logs -f` stalling after 200 lines | done | `GET /api/logs/:id?from=` returns new lines + `next` + `reset`. CLI follows by byte offset and prints `--- log reset ---` after clear. |
-| F-15 | One server scan loop with a cached snapshot | todo | Tier 2 — waiting |
+| F-15 | One server scan loop with a cached snapshot | done | 3s loop writes the snapshot; GET reuses it for `cacheMs`. Mutations invalidate. Tests keep `cacheMs` 0. |
 | F-16 | Show readiness on the page | todo | Tier 2 — waiting |
 | F-17 | Mask secret-looking env values and gate `/api/env` | todo | Tier 2 — waiting |
 | F-18 | Validate hand-edited registry JSON and serialize writes | todo | Tier 2 — waiting |
