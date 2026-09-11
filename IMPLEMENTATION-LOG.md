@@ -38,6 +38,17 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-28 | Grow the tray: per-service actions and notifications | todo | Tier 3. Human: tray first |
 | F-29 | Trace one request across several services' logs | todo | Tier 3 — waiting |
 
+## Tier 1 pause
+
+All doable Tier 1 items are done. No blocked items. Nothing waiting on you for Tier 1.
+
+Continue to Tier 2 only when you say go: F-04, F-10, F-11, F-12, F-15, F-16, F-17, F-18, F-20.
+
 ## Noticed
 
 - `suggestions/` is untracked and not in `.gitignore`. Left untracked; not part of the product.
+- Existing board on `:4242` blocked a full local `scripts/smoke.sh` run. The abort-if-busy path was verified instead.
+- `bun run setup` with Swift present was run once by mistake while testing F-06 (replaced the existing tray app). The no-Swift skip path was then verified separately.
+- AGENTS.md test count was 133; suite is 144 after Tier 1. Updated in F-19.
+- No browser test harness (plan Gaps). F-02 was verified by hand on the live board.
+- Throwaway screenshot board used `PORT=4342` so it would not touch the real board.
