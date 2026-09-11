@@ -195,3 +195,12 @@ API. Last run 2026-09-10: passed.
 `AGENTS.md` is the instruction file for any coding agent. `agents/` holds scoped
 rules and role prompts. `design.md` is the UI spec. `docs/superpowers/` is the
 original design and plan, kept for history.
+
+## License
+
+devboard is MIT. See `LICENSE`. The only npm dependency is `@types/bun` (dev-only, MIT).
+
+The UI fonts under `public/fonts/` are SIL Open Font License 1.1: IBM Plex Sans
+(Copyright © 2017 IBM Corp.) and JetBrains Mono (Copyright 2020 The JetBrains
+Mono Project Authors). License texts are `public/fonts/OFL-IBM-Plex.txt` and
+`public/fonts/OFL-JetBrains-Mono.txt`.

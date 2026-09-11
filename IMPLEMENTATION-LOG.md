@@ -10,7 +10,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 |---|---|---|---|
 | F-01 | Reject cross-origin and DNS-rebinding requests to the API | done | Gate in `handle` before `route`. Tray already sends `application/json`. Page and smoke now send JSON on DELETE too. Smoke not re-run: real board on :4242. |
 | F-02 | Fix the edit sheets losing their id | done | `openSheet` now hides without resetting edit ids. Browser: Edit dashboard kept `editingId=dashboard-3001` and Save PUT succeeded; New project had null id; Edit project kept `coreagentshub`; close then Add/New project did not leak an id. |
-| F-03 | Add a LICENSE file | todo | Human: MIT. Copyright holder: AbbassBaz (repo owner). |
+| F-03 | Add a LICENSE file | done | MIT, copyright AbbassBaz 2026. `package.json` license field set. README License section names the OFL 1.1 fonts. |
 | F-04 | Track the processes devboard spawns so status is real | todo | Tier 2 — waiting |
 | F-05 | Contain log ids to the log directory | todo | |
 | F-06 | Make the tray build optional in `install` | todo | |
