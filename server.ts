@@ -7,6 +7,7 @@ import { Control, isValidLogId, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
 import { parseEnvText, readProcessEnv } from "./lib/env";
 import { applyReadiness, firstFreePort } from "./lib/health";
+import { classifyLine, countErrors } from "./lib/logs";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
 import { parseLinks, projectViews, servicesInFolder } from "./lib/projects";
 import { Registry } from "./lib/registry";
@@ -77,6 +78,23 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       const crash = s.id ? crashes.info(s.id) : undefined;
       return crash ? { ...s, crash } : s;
     });
+
+  const errCache = new Map<string, { size: number; mtimeMs: number; count: number }>();
+  const errorCountFor = async (id: string): Promise<number> => {
+    if (!control.hasLog(id)) return 0;
+    const info = await stat(control.logPath(id));
+    const hit = errCache.get(id);
+    if (hit && hit.size === info.size && hit.mtimeMs === info.mtimeMs) return hit.count;
+    const count = countErrors((await control.tailLog(id, 4000)).lines);
+    errCache.set(id, { size: info.size, mtimeMs: info.mtimeMs, count });
+    return count;
+  };
+  const withErrorCounts = async (services: Service[]) =>
+    Promise.all(services.map(async (s) => (s.id && s.hasLog ? { ...s, errorCount: await errorCountFor(s.id) } : s)));
+  const withLevels = <T extends { lines: string[] }>(tail: T) => ({
+    ...tail,
+    levels: tail.lines.map(classifyLine),
+  });
 
   const folderMembers = async (folder: string): Promise<string[]> => {
     const { running, services } = await snapshot();
@@ -174,7 +192,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
 
       if (method === "GET" && pathname === "/api/services") {
         const { pinned, services: merged } = await snapshot();
-        const services = withCrash(await applyReadiness(merged, pinned));
+        const services = await withErrorCounts(withCrash(await applyReadiness(merged, pinned)));
         const projects = await registry.loadProjects();
         return json({
           services,
@@ -553,11 +571,11 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (fromRaw != null) {
           const from = Number(fromRaw);
           if (!Number.isFinite(from) || from < 0) return fail("from must be a byte offset");
-          return json(await control.tailLog(id, 200, from));
+          return json(withLevels(await control.tailLog(id, 200, from)));
         }
         const requested = Number(url.searchParams.get("lines") ?? 200);
         const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 5000) : 200;
-        return json(await control.tailLog(id, lines));
+        return json(withLevels(await control.tailLog(id, lines)));
       }
       if (method === "DELETE" && logs) {
         const id = decodeURIComponent(logs[1]);

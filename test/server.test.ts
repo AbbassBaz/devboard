@@ -228,6 +228,17 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     expect(after.lines.some((l: string) => l.includes("cleared"))).toBe(true);
   });
 
+  test("GET /api/services counts classifyLine errors from the log", async () => {
+    running = [];
+    await registry.add({ name: "errs", cwd: home, command: "true", port: 39890 });
+    mkdirSync(control.logDir, { recursive: true });
+    writeFileSync(control.logPath("errs-39890"), "ok\nError: boom\nready\nError: EADDRINUSE\n");
+    const body = await (await call("GET", "/api/services")).json();
+    expect(body.services.find((s: Service) => s.id === "errs-39890")).toMatchObject({ errorCount: 2 });
+    const log = await (await call("GET", "/api/logs/errs-39890?lines=50")).json();
+    expect(log.levels.filter((l: string) => l === "error")).toHaveLength(2);
+  });
+
   test("log ids cannot escape the log directory", async () => {
     const outside = join(home, "..", "outside.log");
     writeFileSync(outside, "leave me alone\n");

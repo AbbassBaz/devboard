@@ -18,7 +18,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-08 | Rewrite the README for a stranger | done | Pitch, screenshot from throwaway DEVBOARD_HOME, Requirements, Quickstart, env table, Why, Security, Known issues. Page spec moved into design.md. |
 | F-09 | Remove or scrub private names in `docs/superpowers/` | done | Deleted the folder. `rg` for private names is clean outside suggestions/. |
 | F-10 | Rotate logs while a server runs, not only at start | done | `rotateRunning` copies last 2 MB to `.log.1` and ftruncates the live file. 3s loop calls it. Cap only while the board runs. |
-| F-11 | Compute error counts on the server with one classifier | todo | Tier 2 — waiting |
+| F-11 | Compute error counts on the server with one classifier | done | `errorCount` from `classifyLine` on last 4000 lines, cached by size+mtime. Page dropped `RE_ERR`/`hydrateLogs`. Logs API returns `levels`. |
 | F-12 | Adopt a running row when the port moved | todo | Tier 2. Human: may fall back to cwd + command (port stripped) when unique |
 | F-13 | Make CLI `stop-all` pin unsaved rows first, like the page | done | Pins unpinned running `dev` rows before kill; per-row errors print and continue. |
 | F-14 | Fix `devboard logs -f` stalling after 200 lines | done | `GET /api/logs/:id?from=` returns new lines + `next` + `reset`. CLI follows by byte offset and prints `--- log reset ---` after clear. |

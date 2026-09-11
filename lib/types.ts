@@ -70,6 +70,7 @@ export type Service = {
   restartOnCrash?: boolean;
   exitCode?: number;
   crash?: { tries: number; gaveUp: boolean };
+  errorCount?: number;
 };
 
 export type ProjectLink = { label: string; url: string };

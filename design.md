@@ -115,7 +115,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 **Body** (`10px 16px 20px`, mono 12 / 1.6, `#c3c8d1`):
 - Line: flex, gap 14, pad `0 8px`, margin `0 -8px`, radius 3, `cursor: copy`; hover `#1f232a`. Columns: ln 30px right `#4a5160` · time `#5d636e` · text.
-- Color by line text: error `/error|exit|SIGTERM|EADDRINUSE|failed/i` → `#f28b82` on `rgba(229,83,75,.1)`; warn `/warn|⚠|retry/i` → `#e2b96a`; markers `/^===|^\$ |^> /` → dim; success `/listening|Ready|Compiled|connected|ready/` → `#8fd3a6`.
+- Color by `classifyLine` in `lib/logs.ts` (the page uses the `level` from `GET /api/logs/:id`): error → `#f28b82` on `rgba(229,83,75,.1)`; warn → `#e2b96a`; info → `#8fd3a6`; markers `/^===|^\$ |^> /` → dim. Error pills and the top-bar count use `errorCount` from `GET /api/services`.
 - Current error: `box-shadow: inset 2px 0 0 #e5534b`.
 - Blinking 7×14 accent caret at the tail while running (1s steps).
 - Empty (Plex, dim, max 520): stopped → “*name* is stopped…” + Start; unmanaged running → “Started outside devboard…”; filtered → “Nothing matches the current filter.”

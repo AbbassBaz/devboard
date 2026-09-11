@@ -4,10 +4,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const home = (p) => (p ? p.replace(/^\/Users\/[^/]+/, "~") : "");
 const nowClock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
-const RE_ERR = /error|exit|SIGTERM|EADDRINUSE|failed/i;
-const RE_WARN = /warn|⚠|retry/i;
 const RE_MARK = /^===|^\$ |^> /;
-const RE_OK = /listening|Ready|Compiled|connected|ready/;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const LOG_TS = /^(\s*(?:\[[^\]]{6,32}\]|\d{4}-\d{2}-\d{2}[T ][\d:.Z+-]+|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*)/;
 
@@ -107,16 +104,15 @@ function openSheet(id) {
 }
 
 function stripAnsi(s) { return String(s ?? "").replace(ANSI_RE, ""); }
-function isErr(t) { return RE_ERR.test(stripAnsi(t)); }
-function isWarn(t) { return RE_WARN.test(stripAnsi(t)); }
-function lineKind(t) {
-  const text = stripAnsi(t);
-  if (isErr(text)) return "err";
-  if (isWarn(text)) return "warn";
-  if (RE_MARK.test(text)) return "mark";
-  if (RE_OK.test(text)) return "ok";
+function lineKind(level, text) {
+  if (level === "error") return "err";
+  if (level === "warn") return "warn";
+  if (RE_MARK.test(stripAnsi(text))) return "mark";
+  if (level === "info") return "ok";
   return "";
 }
+function isLogErr(entry) { return (typeof entry === "object" ? entry.level : null) === "error"; }
+function logText(entry) { return typeof entry === "string" ? entry : (entry?.text ?? ""); }
 function splitLogLine(raw) {
   const text = stripAnsi(raw);
   const m = LOG_TS.exec(text);
@@ -131,9 +127,8 @@ function formatLogTime(t) {
   const m = t.match(/(\d{2}:\d{2}:\d{2})/);
   return m ? m[1] : t;
 }
-function errCount(id) { return (logs[id] || []).filter(isErr).length; }
 function errTotal() {
-  return latest.filter((s) => s.kind === "dev" && !s.hidden).reduce((n, s) => n + errCount(s.id), 0);
+  return latest.filter((s) => s.kind === "dev" && !s.hidden).reduce((n, s) => n + (s.errorCount ?? 0), 0);
 }
 
 function formatEnv(env) {
@@ -188,7 +183,7 @@ function optimisticStartLines(s) {
 }
 
 function appendStartLines(s) {
-  logs[s.id] = [...(logs[s.id] || []), ...optimisticStartLines(s)];
+  logs[s.id] = [...(logs[s.id] || []), ...optimisticStartLines(s).map((text) => ({ text, level: "other" }))];
 }
 
 async function loadSuggest(dir, boxId, cmdId, portId) {
@@ -281,7 +276,7 @@ function rowHtml(s) {
   const b = busy[s.id]?.state;
   const port = portOf(s);
   const cpu = s.cpu ?? 0;
-  const errs = errCount(s.id);
+  const errs = s.errorCount ?? 0;
   const barW = state === "on" ? Math.round(Math.max(Math.min(cpu / 6, 1), cpu ? 0.04 : 0) * 100) : 0;
   const meta = state === "on"
     ? `pid ${s.rootPid} · ${cpu.toFixed(1)}% · ${s.memMb ?? 0} MB · up ${s.uptime || ""}`
@@ -375,13 +370,13 @@ function paintLogHead() {
 function shownLogs(s) {
   const raw = (s && logs[s.id]) || [];
   const q = logFilter.trim().toLowerCase();
-  return raw.map((rawLine, i) => ({ raw: rawLine, i, text: stripAnsi(rawLine) }))
-    .filter((l) => (!q || l.text.toLowerCase().includes(q)) && (!errOnly || isErr(l.text)));
+  return raw.map((entry, i) => ({ raw: logText(entry), i, text: stripAnsi(logText(entry)), level: entry.level }))
+    .filter((l) => (!q || l.text.toLowerCase().includes(q)) && (!errOnly || l.level === "error"));
 }
 
 function paintLogTools(s) {
   const raw = (s && logs[s.id]) || [];
-  const errIdx = raw.map((l, i) => (isErr(l) ? i : -1)).filter((i) => i >= 0);
+  const errIdx = raw.map((l, i) => (isLogErr(l) ? i : -1)).filter((i) => i >= 0);
   const shown = shownLogs(s);
   const chip = $("#errChip");
   chip.hidden = !s || errIdx.length === 0;
@@ -411,7 +406,7 @@ function paintLogBody(s) {
   const shown = shownLogs(s);
   const unmanaged = s.status === "running" && !s.hasLog && !raw.length;
   const filteredEmpty = raw.length && !shown.length;
-  const sig = [s.id, raw.length, raw.at(-1), logFilter, errOnly, errCursor, s.status, rowState(s), follow].join("|");
+  const sig = [s.id, raw.length, logText(raw.at(-1) ?? ""), logFilter, errOnly, errCursor, s.status, rowState(s), follow].join("|");
   if (sig === lastLogSig) {
     if (follow) body.scrollTop = body.scrollHeight;
     return;
@@ -440,7 +435,7 @@ function paintLogBody(s) {
   const showTime = times.some(Boolean);
   body.innerHTML = shown.map((l) => {
     const { time, body: rest } = splitLogLine(l.raw);
-    const kind = lineKind(l.text);
+    const kind = lineKind(l.level, l.text);
     const t = formatLogTime(time);
     const display = (rest || l.text) || l.text;
     return `<div class="log-line ${kind}${errCursor === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
@@ -484,7 +479,7 @@ function nextErr() {
   const s = selected();
   if (!s) return;
   const raw = logs[s.id] || [];
-  const idx = raw.map((l, i) => (isErr(l) ? i : -1)).filter((i) => i >= 0);
+  const idx = raw.map((l, i) => (isLogErr(l) ? i : -1)).filter((i) => i >= 0);
   if (!idx.length) return;
   const cur = errCursor == null ? -1 : errCursor;
   const next = idx.find((i) => i > cur) ?? idx[0];
@@ -750,16 +745,11 @@ async function fetchLog(id) {
   const s = latest.find((x) => x.id === id);
   if (!s?.hasLog) return;
   try {
-    const { lines } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=4000`);
-    logs[id] = lines;
+    const { lines, levels } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=4000`);
+    logs[id] = (lines || []).map((text, i) => ({ text, level: levels?.[i] || "other" }));
     if (id === sel) { lastLogSig = ""; paintLog(); }
     else { paintChrome(); paintList(); }
   } catch {}
-}
-
-async function hydrateLogs() {
-  const ids = latest.filter((s) => s.kind === "dev" && s.hasLog && s.id && logs[s.id] == null).map((s) => s.id);
-  await Promise.all(ids.slice(0, 24).map((id) => fetchLog(id)));
 }
 
 async function refresh() {
@@ -769,7 +759,7 @@ async function refresh() {
     projects = data.projects ?? [];
     presets = data.presets ?? [];
     render();
-    hydrateLogs();
+    if (sel) fetchLog(sel);
   } catch {
     $("#counts").innerHTML = `<span class="err">server unreachable</span>`;
   }
@@ -783,7 +773,7 @@ document.addEventListener("click", async (ev) => {
   const line = ev.target.closest(".log-line");
   if (line && !ev.target.closest("button")) {
     const s = selected();
-    const rec = (logs[s?.id] || [])[Number(line.dataset.i)];
+    const rec = logText((logs[s?.id] || [])[Number(line.dataset.i)]);
     if (rec) copy(stripAnsi(rec).replace(LOG_TS, "").trim() || stripAnsi(rec));
     return;
   }

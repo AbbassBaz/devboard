@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyLine, looksLikeJson, splitLogLine, stripAnsi } from "../lib/logs";
+import { classifyLine, countErrors, looksLikeJson, splitLogLine, stripAnsi } from "../lib/logs";
 
 describe("stripAnsi and splitLogLine", () => {
   test("drops SGR sequences and lifts an ISO timestamp", () => {
@@ -25,6 +25,10 @@ describe("classifyLine", () => {
     expect(classifyLine("✓ Ready in 307ms")).toBe("info");
     expect(classifyLine("debug fetching user")).toBe("debug");
     expect(classifyLine("===== 2026-09-11 start =====")).toBe("other");
+  });
+
+  test("countErrors uses classifyLine", () => {
+    expect(countErrors(["ok", "Error: boom", "ready", "Error: EADDRINUSE"])).toBe(2);
   });
 });
 
