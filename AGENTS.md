@@ -14,7 +14,7 @@ Loopback only by design; no remote mode or auth.
 bun install
 bun run start                 # server + menu bar extra
 bun run dev                   # restarts on file change
-bun test                      # 152 tests, ~10s, one live test spawns a real process on :39999
+bun test                      # 153 tests, ~10s, one live test spawns a real process on :39999
 bash scripts/smoke.sh         # end-to-end against a real board; needs :4242 and :3999 free
 bun run devboard -- <cmd>     # CLI without installing
 bun run setup                 # symlink `devboard` into ~/.local/bin, build + install the tray app
@@ -30,7 +30,7 @@ DEVBOARD_TRAY=0 bun run start # server only, no menu bar extra
 | `lib/discover.ts` | `lsof` + `ps` parsing, wrapper walk to the root pid, `groupServices` |
 | `lib/merge.ts` | Joins running rows to pinned entries by `cwd` + port into `Service[]` |
 | `lib/registry.ts` | `~/.devboard/*.json` reads and atomic writes. `DEVBOARD_HOME` overrides the dir. Files are re-read per request, never cached. |
-| `lib/control.ts` | Spawn detached via `/bin/sh -c`, log append with 5 MB cap and 2 MB keep, `killTree` (SIGTERM, then SIGKILL after 3s) |
+| `lib/control.ts` | Spawn detached via `/bin/sh -c`, log append with 5 MB cap and 2 MB keep (rotate while the board runs), `killTree` (SIGTERM, then SIGKILL after 3s) |
 | `lib/health.ts` | Explicit health URL probes only. No URL means ready. |
 | `lib/restarts.ts` | `CrashWatch`: 5 tries, exponential backoff, disarmed by stop/kill |
 | `lib/env.ts` | `KEY=value` parsing, live `ps -Eww` env read |

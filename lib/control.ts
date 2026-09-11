@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, fstatSync, openSync, writeSync } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { closeSync, existsSync, fstatSync, ftruncateSync, openSync, writeSync } from "node:fs";
+import { mkdir, stat, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { mergeEnv } from "./env";
 import { DEVBOARD_HOME, Registry } from "./registry";
@@ -89,6 +89,31 @@ export class Control {
     if (nl >= 0) text = text.slice(nl + 1);
     await Bun.write(path, `===== ${new Date().toISOString()} rotated, kept last ${(text.length / 1024).toFixed(0)} KB =====\n${text}`);
     return true;
+  }
+
+  /** Copy the last keep-bytes to `<id>.log.1` and truncate the live file. Safe while a child holds an O_APPEND fd. */
+  async rotateRunning(ids: string[], maxBytes = LOG_MAX_BYTES, keepBytes = LOG_KEEP_BYTES): Promise<string[]> {
+    const rotated: string[] = [];
+    for (const id of ids) {
+      if (!isValidLogId(id) || !this.hasLog(id)) continue;
+      const path = this.logPath(id);
+      const info = await stat(path).catch(() => undefined);
+      if (!info || info.size <= maxBytes) continue;
+      const from = Math.max(0, info.size - keepBytes);
+      let text = await Bun.file(path).slice(from, info.size).text();
+      const nl = text.indexOf("\n");
+      if (nl >= 0) text = text.slice(nl + 1);
+      await Bun.write(`${path}.1`, text);
+      const fd = openSync(path, "r+");
+      try {
+        ftruncateSync(fd, 0);
+        writeSync(fd, `===== ${new Date().toISOString()} rotated =====\n`);
+      } finally {
+        closeSync(fd);
+      }
+      rotated.push(id);
+    }
+    return rotated;
   }
 
   async hydrate(): Promise<void> {
@@ -186,6 +211,7 @@ export class Control {
     if (!this.hasLog(id)) throw new Error("no log for that id");
     const path = this.logPath(id);
     await Bun.write(path, `===== ${new Date().toISOString()} cleared =====\n`);
+    await unlink(`${path}.1`).catch(() => undefined);
     const { size } = await stat(path);
     return { path, size };
   }
@@ -196,8 +222,7 @@ export class Control {
     if (from != null) {
       if (size < from) {
         const text = await Bun.file(path).text();
-        const all = text.split("\n");
-        if (all.at(-1) === "") all.pop();
+        const all = splitLogLines(text);
         return { lines: all, path, size, reset: true, next: size };
       }
       const text = await Bun.file(path).slice(from, size).text();
@@ -207,9 +232,19 @@ export class Control {
       return { lines: linesOut, path, size, next: from + (lastNl >= 0 ? lastNl + 1 : 0) };
     }
     const start = Math.max(0, size - 256 * 1024);
-    const text = await Bun.file(path).slice(start, size).text();
-    const all = text.split("\n");
-    if (all.at(-1) === "") all.pop();
-    return { lines: all.slice(-lines), path, size, next: size };
+    const live = splitLogLines(await Bun.file(path).slice(start, size).text());
+    const prevPath = `${path}.1`;
+    if (live.length >= lines || !existsSync(prevPath)) {
+      return { lines: live.slice(-lines), path, size, next: size };
+    }
+    const prevSize = (await stat(prevPath)).size;
+    const prev = splitLogLines(await Bun.file(prevPath).slice(Math.max(0, prevSize - 256 * 1024), prevSize).text());
+    return { lines: [...prev.slice(-(lines - live.length)), ...live], path, size, next: size };
   }
+}
+
+function splitLogLines(text: string): string[] {
+  const all = text.split("\n");
+  if (all.at(-1) === "") all.pop();
+  return all;
 }

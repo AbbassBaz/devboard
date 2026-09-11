@@ -589,6 +589,8 @@ if (import.meta.main) {
       control.reconcile();
       const [running, pinned, ignored] = await Promise.all([realDiscover(), registry.load(), registry.loadIgnored()]);
       const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored, control.listTracked());
+      const logIds = services.filter((s) => s.id && s.hasLog && (s.status === "running" || s.status === "starting")).map((s) => s.id!);
+      await control.rotateRunning(logIds);
       const restarted = await crashes.tick(services, pinned);
       if (restarted.length) console.log(`${new Date().toISOString()} crash-restart ${restarted.join(",")}`);
     } catch {}

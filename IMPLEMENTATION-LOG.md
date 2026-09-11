@@ -17,7 +17,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-07 | CI on a macOS runner, with a smoke script that cannot touch a real board | done | macos-14 workflow + `.bun-version` 1.2.18. Locally, busy :4242 makes smoke abort before any API call; sentinel survived. |
 | F-08 | Rewrite the README for a stranger | done | Pitch, screenshot from throwaway DEVBOARD_HOME, Requirements, Quickstart, env table, Why, Security, Known issues. Page spec moved into design.md. |
 | F-09 | Remove or scrub private names in `docs/superpowers/` | done | Deleted the folder. `rg` for private names is clean outside suggestions/. |
-| F-10 | Rotate logs while a server runs, not only at start | todo | Tier 2 — waiting |
+| F-10 | Rotate logs while a server runs, not only at start | done | `rotateRunning` copies last 2 MB to `.log.1` and ftruncates the live file. 3s loop calls it. Cap only while the board runs. |
 | F-11 | Compute error counts on the server with one classifier | todo | Tier 2 — waiting |
 | F-12 | Adopt a running row when the port moved | todo | Tier 2. Human: may fall back to cwd + command (port stripped) when unique |
 | F-13 | Make CLI `stop-all` pin unsaved rows first, like the page | done | Pins unpinned running `dev` rows before kill; per-row errors print and continue. |

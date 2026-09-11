@@ -58,7 +58,7 @@ pm2 and Overmind supervise processes you handed them. Port-killer menu apps list
 - **Kill.** SIGTERM to every pid in the tree at once, SIGKILL to survivors after 3 seconds.
 - **Pin.** Saves name, folder, command and port so the service can be started later. Matched to running rows by folder plus port. Switching an unsaved server off pins it first.
 - **Start / Restart.** Runs the saved command in its folder via `/bin/sh -c`, detached, output appended to `~/.devboard/logs/<id>.log`. Closing the board does not stop what it started. Optional restart-on-crash (5 tries, exponential backoff) relaunches a stopped server whose last log looks like an error. Stop and Kill disarm it.
-- **Logs.** Last 4000 lines, refreshed every 2 seconds. Filter, jump between errors, follow the tail. Files exist only for services the board started. Each file is capped at 5 MB at start (last 2 MB kept).
+- **Logs.** Last 4000 lines, refreshed every 2 seconds. Filter, jump between errors, follow the tail. Files exist only for services the board started. While the board is running, each file is capped at 5 MB (last 2 MB kept in `<id>.log.1`).
 - **CLI.** `start`, `stop`, `restart`, `logs [-f]`, `start-all`, `stop-all`, `up`, `tray`. `stop-all` pins unsaved running rows first, like the page.
 - **Menu bar.** Count of servers on, start/stop, open a port, open the board. Quitting the extra does not stop your servers.
 - **Projects, worktrees, presets, attention, env.** Group servers, inventory git checkouts, resume a named set, surface port conflicts and crashed pins, edit env overrides.
@@ -70,7 +70,7 @@ The page layout, keys, and tokens live in `design.md`.
 - Logs exist only for services devboard started. A process you launched from a terminal keeps its output in that terminal; macOS gives no way to attach.
 - Killing a **System** row (Postgres, Redis, ControlCenter) usually just makes launchd or Homebrew restart it. Use `brew services stop <name>`.
 - If a pinned service comes up on a different port than the one saved, it shows as stopped next to a new unpinned running row. Matching is cwd + port.
-- Log files rotate at 5 MB (last 2 MB kept) when a service starts. Deleting one is still safe.
+- Log files rotate at 5 MB (last 2 MB kept) while the board is running. Deleting one is still safe.
 - Health probes run only when you set a health URL. A server that logs every request to `/` will not see board traffic unless you ask for it.
 
 ## Security
@@ -78,10 +78,6 @@ The page layout, keys, and tokens live in `design.md`.
 Loopback only. The API kills process trees and runs saved shell commands. Never bind off `127.0.0.1`. There is no remote or multi-machine mode, and no auth — one user, one machine.
 
 Requests whose Host or Origin is not loopback (`127.0.0.1`, `localhost`, `::1`), or whose `Sec-Fetch-Site` is present and not `same-origin` or `none`, get 403. Non-GET requests must be `application/json` (415 otherwise). There are no CORS headers.
-
-## Known issues
-
-- The 5 MB log cap is enforced at start, not while a chatty server is running.
 
 ## Smoke
 
