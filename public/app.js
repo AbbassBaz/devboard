@@ -156,6 +156,15 @@ function rowState(s) {
   if (s.status === "starting") return "busy";
   return s.status === "running" ? "on" : "off";
 }
+function isUnhealthy(s) {
+  return s.status === "running" && s.readiness === "unhealthy";
+}
+function healthNote(s) {
+  if (!isUnhealthy(s)) return "";
+  if (s.health?.status != null) return `health ${s.health.status} · ${s.health.ms}ms`;
+  if (s.health?.error) return `health ${s.health.error}`;
+  return "unhealthy";
+}
 function portOf(s) { return s.ports?.[0]; }
 function runCmd(s) { return `cd ${s.cwd || "."} && ${s.command || ""}`; }
 
@@ -214,10 +223,12 @@ function paintChrome() {
   const nBusy = dev.filter((s) => busy[s.id]).length;
   const nDown = Math.max(0, dev.length - nUp - nBusy);
   const nErr = errTotal();
+  const nUnhealthy = dev.filter(isUnhealthy).length;
   $("#counts").innerHTML =
     `<span><span class="n">${nUp}</span> up</span>` +
     `<span class="${nDown ? "hot" : ""}">${nDown} down</span>` +
-    `<span class="${nErr ? "err" : ""}">${nErr} err</span>`;
+    `<span class="${nErr ? "err" : ""}">${nErr} err</span>` +
+    `<span class="${nUnhealthy ? "err" : ""}">${nUnhealthy} unhealthy</span>`;
   $("#poll").textContent = `poll 3s · ${location.host || "127.0.0.1:4242"}`;
 }
 
@@ -278,15 +289,16 @@ function rowHtml(s) {
   const cpu = s.cpu ?? 0;
   const errs = s.errorCount ?? 0;
   const barW = state === "on" ? Math.round(Math.max(Math.min(cpu / 6, 1), cpu ? 0.04 : 0) * 100) : 0;
+  const note = healthNote(s);
   const meta = state === "on"
-    ? `pid ${s.rootPid} · ${cpu.toFixed(1)}% · ${s.memMb ?? 0} MB · up ${s.uptime || ""}`
+    ? `pid ${s.rootPid} · ${cpu.toFixed(1)}% · ${s.memMb ?? 0} MB · up ${s.uptime || ""}${note ? ` · ${note}` : ""}`
     : state === "busy"
       ? `${b || "starting"}… waiting for :${port ?? "—"}`
       : s.exitCode != null ? `stopped · exit ${s.exitCode}` : s.pinned ? "stopped · saved" : "stopped";
   const switchLabel = state === "busy" ? (b || "starting") : s.status === "running" ? `Stop ${s.name}` : `Start ${s.name}`;
   const crashPill = s.crash?.gaveUp ? `<span class="err-pill">restart failed ×5</span>` : "";
   return `<div class="row ${state}${sel === s.id ? " sel" : ""}" data-id="${esc(s.id)}" data-act="select">
-    <span class="dot ${state}"></span>
+    <span class="dot ${state}${isUnhealthy(s) ? " bad" : ""}" title="${isUnhealthy(s) ? "unhealthy" : ""}"></span>
     <span class="row-main">
       <span class="row-name"><span class="n">${esc(s.name)}</span>${port ? `<a class="port" href="http://localhost:${port}" target="_blank" rel="noopener" data-act="open-port">:${port}</a>` : ""}</span>
       <span class="row-meta">${esc(meta)}</span>
@@ -336,12 +348,12 @@ function paintLogHead() {
   const state = rowState(s);
   const bsy = busy[s.id]?.state;
   const port = portOf(s);
-  const stateLabel = state === "on" ? "running" : state === "busy" ? (bsy || "starting") : "stopped";
+  const stateLabel = isUnhealthy(s) ? "unhealthy" : state === "on" ? "running" : state === "busy" ? (bsy || "starting") : "stopped";
   const primaryLabel = state === "busy" ? `${bsy || "starting"}…` : state === "on" ? "Restart" : "Start";
   const primaryClass = state === "busy" ? "busy" : state === "on" ? "restart" : "";
   const items = logMenuItems(s);
   a.innerHTML = `
-    <span class="dot ${state}"></span>
+    <span class="dot ${state}${isUnhealthy(s) ? " bad" : ""}" title="${isUnhealthy(s) ? "unhealthy" : ""}"></span>
     <span class="name">${esc(s.name)}</span>
     ${port ? `<a class="host" href="http://localhost:${port}" target="_blank" rel="noopener">localhost:${port} ↗</a>` : ""}
     <span class="state">${esc(stateLabel)}</span>

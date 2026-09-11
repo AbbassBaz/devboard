@@ -88,7 +88,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 ### Top bar — 44px, `#1c1f24`, border-bottom `#2a2e35`, padding `0 16px`, gap 20
 
 - Brand: 8×8 `#8ab4f8` square + “devboard” 600.
-- Counts, mono 12 dim: `N up` (number `#d7dae0`); `N down` (whole span `#d7dae0` if >0 else dim); `N err` (`#e5534b` if >0 else dim). Errors come from cached log lines.
+- Counts, mono 12 dim: `N up` (number `#d7dae0`); `N down` (whole span `#d7dae0` if >0 else dim); `N err` (`#e5534b` if >0 else dim); `N unhealthy` (error token if >0). Errors come from `errorCount` on the service row.
 - Right: clock `HH:MM:SS` mono 12 dim · `+ Add` · `···`. Menu: Start all · Stop all · ─ · Worktrees… · New project… · Presets… · Attention….
 
 ### Sidebar — `#191c21`, border-right `#2a2e35`
@@ -97,9 +97,9 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 - `+ Add` opens an inline form under the filter (bg `#1c1f24`): name, folder, command \| port (`1fr 80px`), Cancel / **Add** (accent fill, ink, 600). Folder blur → `GET /api/suggest`. Submit → `POST /api/pinned`. Extra fields (health, env, restart-on-crash) stay on the Edit sheet.
 - Group header (`10px 12px 4px`, 11px): uppercase 600 `.06em` `#aeb4bf` (project name, or “Other”) · mono `running/total` dim · localhost port links `:3000` and any saved project links · project text buttons `start` / `stop` (hover `#23272e`, green / red) → `/api/projects/:id/start|stop`.
 - Row: `10px 1fr auto auto`, gap 10, margin `0 6px`, padding `7px 8px 7px 10px`, radius 6. Selected `#242932`, hover `#23272e`. Click selects.
-  - Dot 8px: running `#4fb477` + ring; busy `#d4a72c` pulse `.8s`; stopped `#3a3e46`.
+  - Dot 8px: running `#4fb477` + ring; busy `#d4a72c` pulse `.8s`; stopped `#3a3e46`; running + `readiness: unhealthy` uses the error token and an `unhealthy` title.
   - Name 500 (`#8b919c` if stopped) + port link `:3003` → `http://localhost:PORT`.
-  - Meta mono 11 dim: running `pid · cpu% · MB · up`; busy/starting `starting… waiting for :PORT`; stopped `stopped · saved` / `stopped` / `stopped · exit N` when a tracked process exited with that code.
+  - Meta mono 11 dim: running `pid · cpu% · MB · up`; append `health <status> · <ms>ms` or the probe error when unhealthy; busy/starting `starting… waiting for :PORT`; stopped `stopped · saved` / `stopped` / `stopped · exit N` when a tracked process exited with that code.
   - Error pill only if >0: 600 11 `#e5534b` on `rgba(229,83,75,.12)`. `restart failed ×5` in the same token when crash-restart gave up.
   - CPU bar 40×3, track `#2a2e35`, fill accent (error above 75% of scale). Width `cpu/6*100%`, capped.
   - Switch 30×16: on green / knob `#0f1a14` +14px; busy amber wash, `cursor: progress`; off `#23272e` / `#3a3e46` / dim. Same start / pin-then-kill as today. `stopPropagation` — do not change selection.
@@ -107,7 +107,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 ### Log pane — `#16181c`
 
-**A** (min 44, `8px 16px`, wrap, border `#2a2e35`): dot · name 600 14 · `localhost:PORT ↗` · state dim. Primary: **Start** green fill when stopped; **Restart** outlined when running; `starting…` disabled when busy. Then `···` (200px menu): Open in browser (`o`) · Open in editor · Copy run command (`c`) · ─ · Show errors only / Show all · Follow / Stop following · Clear log · ─ · Pin (unpinned) · Edit… (pinned) · Env… · Add to / Remove from project · Hide · Remove (red, pinned).
+**A** (min 44, `8px 16px`, wrap, border `#2a2e35`): dot · name 600 14 · `localhost:PORT ↗` · state dim (`unhealthy` in the error token when the probe fails). Primary: **Start** green fill when stopped; **Restart** outlined when running; `starting…` disabled when busy. Then `···` (200px menu): Open in browser (`o`) · Open in editor · Copy run command (`c`) · ─ · Show errors only / Show all · Follow / Stop following · Clear log · ─ · Pin (unpinned) · Edit… (pinned) · Env… · Add to / Remove from project · Hide · Remove (red, pinned).
 
 **B** (30px, mono 11 dim, border `#22262c`): click-to-copy `cwd` and `$ command` (glyph `#4a5160`, hover `#d7dae0`); `pid · cpu · MB · up` when running.
 
