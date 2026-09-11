@@ -20,6 +20,14 @@ describe("matchPinned", () => {
     expect(matchPinned(docs, [pinnedDocs, pinnedApi])).toBe(pinnedDocs);
     expect(matchPinned(backend, [pinnedDocs, pinnedApi])).toBeUndefined();
   });
+
+  test("falls back to cwd plus port-stripped command when the match is unique", () => {
+    const pin: Pinned = { id: "web-3000", name: "web", cwd: docs.cwd!, command: "next dev --port 3000", port: 3000 };
+    const moved: RunningService = { ...docs, ports: [3001], command: "next dev --port 3001" };
+    expect(matchPinned(moved, [pin])).toBe(pin);
+    const twin: RunningService = { ...moved, rootPid: 9, pids: [9], ports: [3002] };
+    expect(matchPinned(moved, [pin], [moved, twin])).toBeUndefined();
+  });
 });
 
 describe("logIdFor", () => {
@@ -78,6 +86,23 @@ describe("mergeServices", () => {
     ])[0];
     expect(row).toMatchObject({ status: "starting", readiness: "starting", rootPid: 4242 });
     expect(row.exitCode).toBeUndefined();
+  });
+
+  test("adopts a unique cwd plus port-stripped command when the listen port moved", () => {
+    const pin: Pinned = { id: "web-3000", name: "web", cwd: docs.cwd!, command: "next dev --port 3000", port: 3000 };
+    const moved: RunningService = { ...docs, ports: [3001], command: "next dev --port 3001" };
+    const rows = mergeServices([moved], [pin], () => false);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: "web-3000", status: "running", pinned: true, ports: [3001] });
+  });
+
+  test("two running rows with the same stripped command stay unmatched", () => {
+    const pin: Pinned = { id: "web-3000", name: "web", cwd: docs.cwd!, command: "next dev --port 3000", port: 3000 };
+    const a: RunningService = { ...docs, rootPid: 1, pids: [1], ports: [3001], command: "next dev --port 3001" };
+    const b: RunningService = { ...docs, rootPid: 2, pids: [2], ports: [3002], command: "next dev --port 3002" };
+    const rows = mergeServices([a, b], [pin], () => false);
+    expect(rows.filter((s) => s.pinned && s.status === "stopped")).toHaveLength(1);
+    expect(rows.filter((s) => !s.pinned && s.status === "running")).toHaveLength(2);
   });
 
   test("a recorded non-zero exit is carried on the stopped row", () => {

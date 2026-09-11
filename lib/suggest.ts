@@ -26,6 +26,16 @@ export function portFromCommand(command: string): number | undefined {
   return port >= 1 && port <= 65535 ? port : undefined;
 }
 
+/** Strip `--port` / `-p` / `PORT=` so two invocations of the same server compare equal. */
+export function commandWithoutPort(command: string): string {
+  return command
+    .replace(/--port[=\s]+\d+/gi, " ")
+    .replace(/(?:^|\s)-p[=\s]+\d+(?=\s|$)/g, " ")
+    .replace(/\bPORT=\d+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Rewrite a saved command so a worktree copy listens on `port`. */
 export function rewriteCommandPort(command: string, port: number): string {
   if (/--port[=\s]+\d+/i.test(command)) return command.replace(/--port[=\s]+\d+/i, `--port ${port}`);

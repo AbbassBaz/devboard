@@ -14,7 +14,7 @@ Loopback only by design; no remote mode or auth.
 bun install
 bun run start                 # server + menu bar extra
 bun run dev                   # restarts on file change
-bun test                      # 155 tests, ~10s, one live test spawns a real process on :39999
+bun test                      # 159 tests, ~10s, one live test spawns a real process on :39999
 bash scripts/smoke.sh         # end-to-end against a real board; needs :4242 and :3999 free
 bun run devboard -- <cmd>     # CLI without installing
 bun run setup                 # symlink `devboard` into ~/.local/bin, build + install the tray app
@@ -90,7 +90,7 @@ For UI changes, start the board with `DEVBOARD_TRAY=0 bun run start`, open `http
 - `sh -c "cmd"` with a single command execs in place and leaves no tree to discover. Tests and the smoke script use `sh -c "cmd; exit 0"` to keep `sh` as the root.
 - The wrapper walk stops at devboard's own pid. Services devboard starts must keep their own row; do not "fix" the walk to climb further.
 - `npx foo --port 3001` shows in `ps` as `npm exec foo --port 3001`. Save it as `npm exec -- foo --port 3001` or npm eats the flag.
-- A pinned service that comes up on a different port shows as stopped next to a new unpinned running row. Matching is `cwd` + port by design.
+- Matching is `cwd` + port. If that misses and exactly one running `dev` row shares the cwd and the same command with `--port`/`-p`/`PORT=` stripped, the view adopts that row. The saved port is not rewritten. Two candidates stay unmatched.
 - Health probes only run with an explicit URL. Probing `/` by default floods dev server logs.
 - Restart-on-crash must be disarmed by stop and kill, or a clean shutdown bounces back.
 - Log files exist only for services devboard started. There is no way to attach to a terminal's stdout on macOS.
