@@ -2,12 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isServerScript, parseComposeServices, parsePackageScripts, parseProcfile, portFromCommand, rewriteCommandPort, rewriteUrlPort, suggestCommands } from "../lib/suggest";
+import { commandWithoutPort, isServerScript, parseComposeServices, parsePackageScripts, parseProcfile, portFromCommand, rewriteCommandPort, rewriteUrlPort, suggestCommands } from "../lib/suggest";
 
 describe("portFromCommand", () => {
   test("reads --port, PORT=, and :port", () => {
     expect(portFromCommand("next dev --port 3010")).toBe(3010);
     expect(portFromCommand("PORT=8787 bun run src/index.ts")).toBe(8787);
+  });
+});
+
+describe("commandWithoutPort", () => {
+  test("strips --port, -p, and PORT=", () => {
+    expect(commandWithoutPort("next dev --port 3000")).toBe("next dev");
+    expect(commandWithoutPort("next dev -p 3001")).toBe("next dev");
+    expect(commandWithoutPort("PORT=3000 bun run --watch src/index.ts")).toBe("bun run --watch src/index.ts");
   });
 });
 

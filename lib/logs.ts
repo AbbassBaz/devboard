@@ -45,6 +45,10 @@ export function classifyLine(raw: string): LogLevel {
   return "other";
 }
 
+export function countErrors(lines: string[]): number {
+  return lines.reduce((n, line) => n + (classifyLine(line) === "error" ? 1 : 0), 0);
+}
+
 export function looksLikeJson(s: string): boolean {
   const t = stripAnsi(s).trim();
   return (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"));

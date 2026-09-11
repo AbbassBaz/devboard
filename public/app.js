@@ -4,10 +4,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const home = (p) => (p ? p.replace(/^\/Users\/[^/]+/, "~") : "");
 const nowClock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
-const RE_ERR = /error|exit|SIGTERM|EADDRINUSE|failed/i;
-const RE_WARN = /warn|⚠|retry/i;
 const RE_MARK = /^===|^\$ |^> /;
-const RE_OK = /listening|Ready|Compiled|connected|ready/;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const LOG_TS = /^(\s*(?:\[[^\]]{6,32}\]|\d{4}-\d{2}-\d{2}[T ][\d:.Z+-]+|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*)/;
 
@@ -107,16 +104,15 @@ function openSheet(id) {
 }
 
 function stripAnsi(s) { return String(s ?? "").replace(ANSI_RE, ""); }
-function isErr(t) { return RE_ERR.test(stripAnsi(t)); }
-function isWarn(t) { return RE_WARN.test(stripAnsi(t)); }
-function lineKind(t) {
-  const text = stripAnsi(t);
-  if (isErr(text)) return "err";
-  if (isWarn(text)) return "warn";
-  if (RE_MARK.test(text)) return "mark";
-  if (RE_OK.test(text)) return "ok";
+function lineKind(level, text) {
+  if (level === "error") return "err";
+  if (level === "warn") return "warn";
+  if (RE_MARK.test(stripAnsi(text))) return "mark";
+  if (level === "info") return "ok";
   return "";
 }
+function isLogErr(entry) { return (typeof entry === "object" ? entry.level : null) === "error"; }
+function logText(entry) { return typeof entry === "string" ? entry : (entry?.text ?? ""); }
 function splitLogLine(raw) {
   const text = stripAnsi(raw);
   const m = LOG_TS.exec(text);
@@ -131,9 +127,8 @@ function formatLogTime(t) {
   const m = t.match(/(\d{2}:\d{2}:\d{2})/);
   return m ? m[1] : t;
 }
-function errCount(id) { return (logs[id] || []).filter(isErr).length; }
 function errTotal() {
-  return latest.filter((s) => s.kind === "dev" && !s.hidden).reduce((n, s) => n + errCount(s.id), 0);
+  return latest.filter((s) => s.kind === "dev" && !s.hidden).reduce((n, s) => n + (s.errorCount ?? 0), 0);
 }
 
 function formatEnv(env) {
@@ -151,14 +146,24 @@ function clearBusy(id) { delete busy[id]; }
 function sweepBusy() {
   for (const [id, { state, at }] of Object.entries(busy)) {
     const s = latest.find((x) => x.id === id);
-    const settled = (state === "starting" && s?.status === "running") || (state === "stopping" && (!s || s.status === "stopped"));
+    const settled = (state === "starting" && (s?.status === "running" || s?.status === "starting")) || (state === "stopping" && (!s || s.status === "stopped"));
     if (settled || Date.now() - at > 15000) delete busy[id];
   }
 }
 function rowState(s) {
   const b = busy[s.id]?.state;
   if (b) return "busy";
+  if (s.status === "starting") return "busy";
   return s.status === "running" ? "on" : "off";
+}
+function isUnhealthy(s) {
+  return s.status === "running" && s.readiness === "unhealthy";
+}
+function healthNote(s) {
+  if (!isUnhealthy(s)) return "";
+  if (s.health?.status != null) return `health ${s.health.status} · ${s.health.ms}ms`;
+  if (s.health?.error) return `health ${s.health.error}`;
+  return "unhealthy";
 }
 function portOf(s) { return s.ports?.[0]; }
 function runCmd(s) { return `cd ${s.cwd || "."} && ${s.command || ""}`; }
@@ -187,7 +192,7 @@ function optimisticStartLines(s) {
 }
 
 function appendStartLines(s) {
-  logs[s.id] = [...(logs[s.id] || []), ...optimisticStartLines(s)];
+  logs[s.id] = [...(logs[s.id] || []), ...optimisticStartLines(s).map((text) => ({ text, level: "other" }))];
 }
 
 async function loadSuggest(dir, boxId, cmdId, portId) {
@@ -218,10 +223,12 @@ function paintChrome() {
   const nBusy = dev.filter((s) => busy[s.id]).length;
   const nDown = Math.max(0, dev.length - nUp - nBusy);
   const nErr = errTotal();
+  const nUnhealthy = dev.filter(isUnhealthy).length;
   $("#counts").innerHTML =
     `<span><span class="n">${nUp}</span> up</span>` +
     `<span class="${nDown ? "hot" : ""}">${nDown} down</span>` +
-    `<span class="${nErr ? "err" : ""}">${nErr} err</span>`;
+    `<span class="${nErr ? "err" : ""}">${nErr} err</span>` +
+    `<span class="${nUnhealthy ? "err" : ""}">${nUnhealthy} unhealthy</span>`;
   $("#poll").textContent = `poll 3s · ${location.host || "127.0.0.1:4242"}`;
 }
 
@@ -280,22 +287,24 @@ function rowHtml(s) {
   const b = busy[s.id]?.state;
   const port = portOf(s);
   const cpu = s.cpu ?? 0;
-  const errs = errCount(s.id);
+  const errs = s.errorCount ?? 0;
   const barW = state === "on" ? Math.round(Math.max(Math.min(cpu / 6, 1), cpu ? 0.04 : 0) * 100) : 0;
+  const note = healthNote(s);
   const meta = state === "on"
-    ? `pid ${s.rootPid} · ${cpu.toFixed(1)}% · ${s.memMb ?? 0} MB · up ${s.uptime || ""}`
+    ? `pid ${s.rootPid} · ${cpu.toFixed(1)}% · ${s.memMb ?? 0} MB · up ${s.uptime || ""}${note ? ` · ${note}` : ""}`
     : state === "busy"
-      ? `${b}… waiting for :${port ?? "—"}`
-      : s.pinned ? "stopped · saved" : "stopped";
-  const switchLabel = state === "busy" ? b : s.status === "running" ? `Stop ${s.name}` : `Start ${s.name}`;
+      ? `${b || "starting"}… waiting for :${port ?? "—"}`
+      : s.exitCode != null ? `stopped · exit ${s.exitCode}` : s.pinned ? "stopped · saved" : "stopped";
+  const switchLabel = state === "busy" ? (b || "starting") : s.status === "running" ? `Stop ${s.name}` : `Start ${s.name}`;
+  const crashPill = s.crash?.gaveUp ? `<span class="err-pill">restart failed ×5</span>` : "";
   return `<div class="row ${state}${sel === s.id ? " sel" : ""}" data-id="${esc(s.id)}" data-act="select">
-    <span class="dot ${state}"></span>
+    <span class="dot ${state}${isUnhealthy(s) ? " bad" : ""}" title="${isUnhealthy(s) ? "unhealthy" : ""}"></span>
     <span class="row-main">
       <span class="row-name"><span class="n">${esc(s.name)}</span>${port ? `<a class="port" href="http://localhost:${port}" target="_blank" rel="noopener" data-act="open-port">:${port}</a>` : ""}</span>
       <span class="row-meta">${esc(meta)}</span>
     </span>
     <span class="row-right">
-      ${errs ? `<span class="err-pill">${errs}</span>` : ""}
+      ${crashPill}${errs ? `<span class="err-pill">${errs}</span>` : ""}
       <span class="bar"><i class="${cpu > 4.5 ? "hot" : ""}" style="width:${barW}%"></i></span>
     </span>
     <button class="sw ${state}" role="switch" aria-checked="${s.status === "running"}" title="${esc(switchLabel)}" data-act="toggle" ${b ? "disabled" : ""}><span class="knob"></span></button>
@@ -339,12 +348,12 @@ function paintLogHead() {
   const state = rowState(s);
   const bsy = busy[s.id]?.state;
   const port = portOf(s);
-  const stateLabel = state === "on" ? "running" : state === "busy" ? bsy : "stopped";
-  const primaryLabel = state === "busy" ? `${bsy}…` : state === "on" ? "Restart" : "Start";
+  const stateLabel = isUnhealthy(s) ? "unhealthy" : state === "on" ? "running" : state === "busy" ? (bsy || "starting") : "stopped";
+  const primaryLabel = state === "busy" ? `${bsy || "starting"}…` : state === "on" ? "Restart" : "Start";
   const primaryClass = state === "busy" ? "busy" : state === "on" ? "restart" : "";
   const items = logMenuItems(s);
   a.innerHTML = `
-    <span class="dot ${state}"></span>
+    <span class="dot ${state}${isUnhealthy(s) ? " bad" : ""}" title="${isUnhealthy(s) ? "unhealthy" : ""}"></span>
     <span class="name">${esc(s.name)}</span>
     ${port ? `<a class="host" href="http://localhost:${port}" target="_blank" rel="noopener">localhost:${port} ↗</a>` : ""}
     <span class="state">${esc(stateLabel)}</span>
@@ -373,13 +382,13 @@ function paintLogHead() {
 function shownLogs(s) {
   const raw = (s && logs[s.id]) || [];
   const q = logFilter.trim().toLowerCase();
-  return raw.map((rawLine, i) => ({ raw: rawLine, i, text: stripAnsi(rawLine) }))
-    .filter((l) => (!q || l.text.toLowerCase().includes(q)) && (!errOnly || isErr(l.text)));
+  return raw.map((entry, i) => ({ raw: logText(entry), i, text: stripAnsi(logText(entry)), level: entry.level }))
+    .filter((l) => (!q || l.text.toLowerCase().includes(q)) && (!errOnly || l.level === "error"));
 }
 
 function paintLogTools(s) {
   const raw = (s && logs[s.id]) || [];
-  const errIdx = raw.map((l, i) => (isErr(l) ? i : -1)).filter((i) => i >= 0);
+  const errIdx = raw.map((l, i) => (isLogErr(l) ? i : -1)).filter((i) => i >= 0);
   const shown = shownLogs(s);
   const chip = $("#errChip");
   chip.hidden = !s || errIdx.length === 0;
@@ -409,7 +418,7 @@ function paintLogBody(s) {
   const shown = shownLogs(s);
   const unmanaged = s.status === "running" && !s.hasLog && !raw.length;
   const filteredEmpty = raw.length && !shown.length;
-  const sig = [s.id, raw.length, raw.at(-1), logFilter, errOnly, errCursor, s.status, rowState(s), follow].join("|");
+  const sig = [s.id, raw.length, logText(raw.at(-1) ?? ""), logFilter, errOnly, errCursor, s.status, rowState(s), follow].join("|");
   if (sig === lastLogSig) {
     if (follow) body.scrollTop = body.scrollHeight;
     return;
@@ -438,7 +447,7 @@ function paintLogBody(s) {
   const showTime = times.some(Boolean);
   body.innerHTML = shown.map((l) => {
     const { time, body: rest } = splitLogLine(l.raw);
-    const kind = lineKind(l.text);
+    const kind = lineKind(l.level, l.text);
     const t = formatLogTime(time);
     const display = (rest || l.text) || l.text;
     return `<div class="log-line ${kind}${errCursor === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
@@ -482,7 +491,7 @@ function nextErr() {
   const s = selected();
   if (!s) return;
   const raw = logs[s.id] || [];
-  const idx = raw.map((l, i) => (isErr(l) ? i : -1)).filter((i) => i >= 0);
+  const idx = raw.map((l, i) => (isLogErr(l) ? i : -1)).filter((i) => i >= 0);
   if (!idx.length) return;
   const cur = errCursor == null ? -1 : errCursor;
   const next = idx.find((i) => i > cur) ?? idx[0];
@@ -508,7 +517,7 @@ function moveSel(dir) {
 async function toggle(s) {
   if (!s || busy[s.id]) return;
   try {
-    if (s.status === "running") {
+    if (s.status === "running" || s.status === "starting") {
       setBusy(s.id, "stopping");
       render();
       if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid });
@@ -748,16 +757,11 @@ async function fetchLog(id) {
   const s = latest.find((x) => x.id === id);
   if (!s?.hasLog) return;
   try {
-    const { lines } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=4000`);
-    logs[id] = lines;
+    const { lines, levels } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=4000`);
+    logs[id] = (lines || []).map((text, i) => ({ text, level: levels?.[i] || "other" }));
     if (id === sel) { lastLogSig = ""; paintLog(); }
     else { paintChrome(); paintList(); }
   } catch {}
-}
-
-async function hydrateLogs() {
-  const ids = latest.filter((s) => s.kind === "dev" && s.hasLog && s.id && logs[s.id] == null).map((s) => s.id);
-  await Promise.all(ids.slice(0, 24).map((id) => fetchLog(id)));
 }
 
 async function refresh() {
@@ -767,7 +771,7 @@ async function refresh() {
     projects = data.projects ?? [];
     presets = data.presets ?? [];
     render();
-    hydrateLogs();
+    if (sel) fetchLog(sel);
   } catch {
     $("#counts").innerHTML = `<span class="err">server unreachable</span>`;
   }
@@ -781,7 +785,7 @@ document.addEventListener("click", async (ev) => {
   const line = ev.target.closest(".log-line");
   if (line && !ev.target.closest("button")) {
     const s = selected();
-    const rec = (logs[s?.id] || [])[Number(line.dataset.i)];
+    const rec = logText((logs[s?.id] || [])[Number(line.dataset.i)]);
     if (rec) copy(stripAnsi(rec).replace(LOG_TS, "").trim() || stripAnsi(rec));
     return;
   }

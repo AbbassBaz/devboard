@@ -319,6 +319,7 @@ input, textarea { font: inherit; color: var(--fg); }
   background: #3a3e46;
 }
 .dot.on { background: var(--run); box-shadow: 0 0 0 3px rgba(79, 180, 119, .15); }
+.dot.on.bad { background: var(--err); box-shadow: 0 0 0 3px rgba(229, 83, 75, .15); }
 .dot.busy { background: var(--busy); animation: pulse .8s ease-in-out infinite; }
 .dot.hollow {
   background: transparent;

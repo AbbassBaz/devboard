@@ -26,6 +26,16 @@ export class CrashWatch {
     this.armed.delete(id);
   }
 
+  reset(id: string): void {
+    this.armed.set(id, { tries: 0, nextAt: 0 });
+  }
+
+  info(id: string): { tries: number; gaveUp: boolean } | undefined {
+    const st = this.armed.get(id);
+    if (!st) return undefined;
+    return { tries: st.tries, gaveUp: st.tries >= CRASH_MAX_TRIES };
+  }
+
   async tick(services: Service[], pinned: Pinned[], now = Date.now()): Promise<string[]> {
     const restarted: string[] = [];
     for (const p of pinned) {
@@ -34,16 +44,16 @@ export class CrashWatch {
         continue;
       }
       const svc = services.find((s) => s.id === p.id);
-      if (svc?.status === "running") {
+      if (svc?.status === "running" || svc?.status === "starting") {
         const st = this.armed.get(p.id);
         if (st) st.tries = 0;
         this.arm(p.id);
         continue;
       }
       const st = this.armed.get(p.id);
-      if (!st || !this.control.hasLog(p.id) || now < st.nextAt || st.tries >= CRASH_MAX_TRIES) continue;
-      const { lines } = await this.control.tailLog(p.id, 60);
-      if (!looksCrashed(lines)) {
+      if (!st || now < st.nextAt || st.tries >= CRASH_MAX_TRIES) continue;
+      const crashed = svc?.exitCode != null ? svc.exitCode !== 0 : this.control.hasLog(p.id) && looksCrashed((await this.control.tailLog(p.id, 60)).lines);
+      if (!crashed) {
         this.disarm(p.id);
         continue;
       }

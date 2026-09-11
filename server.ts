@@ -7,15 +7,22 @@ import { Control, isValidLogId, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
 import { parseEnvText, readProcessEnv } from "./lib/env";
 import { applyReadiness, firstFreePort } from "./lib/health";
+import { classifyLine, countErrors } from "./lib/logs";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
-import { parseLinks, projectViews, pruneProjectMembers, servicesInFolder } from "./lib/projects";
+import { parseLinks, projectViews, servicesInFolder } from "./lib/projects";
 import { Registry } from "./lib/registry";
 import { CrashWatch } from "./lib/restarts";
 import { suggestCommands } from "./lib/suggest";
-import type { Pinned, ProjectLink, RunningService, StartSpec, WorktreeInfo } from "./lib/types";
+import type { Pinned, ProjectLink, RunningService, Service, StartSpec, WorktreeInfo } from "./lib/types";
 import { createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
+
+export type BoardSnapshot = {
+  running: RunningService[];
+  pinned: Pinned[];
+  services: Service[];
+};
 
 export type Deps = {
   discover: () => Promise<RunningService[]>;
@@ -23,6 +30,12 @@ export type Deps = {
   control: Control;
   crashes?: CrashWatch;
   allowedHosts?: string[];
+  snapshot?: () => Promise<BoardSnapshot>;
+  cacheMs?: number;
+};
+
+export type BoardHandler = ((req: Request) => Promise<Response>) & {
+  refreshSnapshot: () => Promise<BoardSnapshot>;
 };
 
 function hostnameOf(value: string): string | null {
@@ -58,17 +71,59 @@ function readEnvInput(body: Record<string, unknown>): Record<string, string> | u
   return undefined;
 }
 
-export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
+export function createHandler(deps: Deps): BoardHandler {
   const { registry, control } = deps;
   const crashes = deps.crashes ?? new CrashWatch(control);
+  const cacheMs = deps.cacheMs ?? 0;
 
   const findRunning = async (rootPid: number) => (await deps.discover()).find((s) => s.rootPid === rootPid);
 
-  const snapshot = async () => {
+  const buildSnapshot = deps.snapshot ?? (async (): Promise<BoardSnapshot> => {
+    await control.hydrate();
+    control.reconcile();
     const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
-    const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
+    const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored, control.listTracked());
     return { running, pinned, services };
+  });
+
+  let cached: { at: number; data: BoardSnapshot } | null = null;
+  let inflight: Promise<BoardSnapshot> | null = null;
+  const refreshSnapshot = async () => {
+    inflight = buildSnapshot().then((data) => {
+      cached = { at: Date.now(), data };
+      return data;
+    }).finally(() => { inflight = null; });
+    return inflight;
   };
+  const snapshot = async () => {
+    if (inflight) return inflight;
+    if (cached && Date.now() - cached.at < cacheMs) return cached.data;
+    return refreshSnapshot();
+  };
+  const invalidate = () => { cached = null; };
+
+  const withCrash = (services: Service[]) =>
+    services.map((s) => {
+      const crash = s.id ? crashes.info(s.id) : undefined;
+      return crash ? { ...s, crash } : s;
+    });
+
+  const errCache = new Map<string, { size: number; mtimeMs: number; count: number }>();
+  const errorCountFor = async (id: string): Promise<number> => {
+    if (!control.hasLog(id)) return 0;
+    const info = await stat(control.logPath(id));
+    const hit = errCache.get(id);
+    if (hit && hit.size === info.size && hit.mtimeMs === info.mtimeMs) return hit.count;
+    const count = countErrors((await control.tailLog(id, 4000)).lines);
+    errCache.set(id, { size: info.size, mtimeMs: info.mtimeMs, count });
+    return count;
+  };
+  const withErrorCounts = async (services: Service[]) =>
+    Promise.all(services.map(async (s) => (s.id && s.hasLog ? { ...s, errorCount: await errorCountFor(s.id) } : s)));
+  const withLevels = <T extends { lines: string[] }>(tail: T) => ({
+    ...tail,
+    levels: tail.lines.map(classifyLine),
+  });
 
   const folderMembers = async (folder: string): Promise<string[]> => {
     const { running, services } = await snapshot();
@@ -114,7 +169,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     }
   };
 
-  return async function handle(req: Request): Promise<Response> {
+  const handle = async function handle(req: Request): Promise<Response> {
     const extra = deps.allowedHosts ?? [];
     const urlHost = new URL(req.url).hostname;
     if (!isAllowedHost(urlHost, extra)) return fail("forbidden", 403);
@@ -135,12 +190,15 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
 
     const res = await route(req);
     const isMutation = req.method !== "GET";
+    if (isMutation) invalidate();
     if (isMutation || res.status >= 400) {
       const path = new URL(req.url).pathname;
       if (path !== "/favicon.ico") console.log(`${new Date().toISOString()} ${req.method} ${path} -> ${res.status}${res.status >= 400 ? " " + (await res.clone().text()).slice(0, 200) : ""}`);
     }
     return res;
-  };
+  } as BoardHandler;
+  handle.refreshSnapshot = refreshSnapshot;
+  return handle;
 
   async function route(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -165,14 +223,9 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       }
 
       if (method === "GET" && pathname === "/api/services") {
-        const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
-        let services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
-        services = await applyReadiness(services, pinned);
-        await crashes.tick(services, pinned);
-        const known = new Set(services.map((s) => s.id).filter((id): id is string => !!id));
-        const stored = await registry.loadProjects();
-        const projects = pruneProjectMembers(stored, known);
-        if (projects.some((p, i) => p.memberIds.length !== stored[i]?.memberIds.length)) await registry.saveProjects(projects);
+        const { pinned, services: merged } = await snapshot();
+        const services = await withErrorCounts(withCrash(await applyReadiness(merged, pinned)));
+        const projects = await registry.loadProjects();
         return json({
           services,
           projects: projectViews(projects, services),
@@ -184,11 +237,14 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       if (method === "POST" && pathname === "/api/kill") {
         const { rootPid } = await readBody(req);
         if (typeof rootPid !== "number") return fail("rootPid required");
+        await control.hydrate();
         const svc = await findRunning(rootPid);
-        if (!svc) return fail("no running service with that rootPid", 404);
-        const pinned = matchPinned(svc, await registry.load());
-        crashes.disarm(pinned?.id ?? logIdFor(svc));
-        return json(await killTree(svc.pids));
+        const tracked = control.listTracked().find((t) => t.pid === rootPid && t.exitedAt == null);
+        if (!svc && !tracked) return fail("no running service with that rootPid", 404);
+        const pinned = svc ? matchPinned(svc, await registry.load()) : (await registry.load()).find((p) => p.id === tracked?.id);
+        crashes.disarm(pinned?.id ?? (svc ? logIdFor(svc) : tracked!.id));
+        const pids = svc?.pids ?? (tracked ? [tracked.pid] : []);
+        return json(await killTree(pids, 3000, [process.pid], tracked?.pid));
       }
 
       if (method === "POST" && pathname === "/api/start") {
@@ -196,10 +252,11 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (typeof id !== "string") return fail("id required");
         const pinned = (await registry.load()).find((p) => p.id === id);
         if (!pinned) return fail("no pinned service with that id", 404);
+        await control.hydrate();
         const alreadyRunning = (await deps.discover()).some((s) => matchPinned(s, [pinned]));
-        if (alreadyRunning) return fail("already running", 409);
+        if (alreadyRunning || control.isTrackedAlive(id)) return fail("already running", 409);
+        crashes.reset(pinned.id);
         const pid = await control.start(pinned);
-        crashes.arm(pinned.id);
         return json({ pid });
       }
 
@@ -223,9 +280,15 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         } else {
           return fail("rootPid or id required");
         }
-        const result = pids.length ? await killTree(pids) : { killed: [], forced: [] };
+        await control.hydrate();
+        control.reconcile();
+        const groupPid = control.isTrackedAlive(spec.id) ? control.trackedOf(spec.id)?.pid : undefined;
+        const killPids = pids.length ? pids : (groupPid ? [groupPid] : []);
+        const result = killPids.length
+          ? await killTree(killPids, 3000, [process.pid], groupPid)
+          : { killed: [], forced: [] };
+        crashes.reset(spec.id);
         const pid = await control.start(spec);
-        crashes.arm(spec.id);
         return json({ ...result, pid });
       }
 
@@ -352,10 +415,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const started: { id: string; pid: number }[] = [];
         await Promise.all(project.memberIds.map(async (id) => {
           const svc = services.find((s) => s.id === id);
-          if (!svc || svc.status === "running") return;
+          if (!svc || svc.status === "running" || svc.status === "starting") return;
           const spec = pinned.find((p) => p.id === id);
           if (!spec) { errors.push({ id, error: "not pinned" }); return; }
-          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
+          try { crashes.reset(id); const pid = await control.start(spec); started.push({ id, pid }); }
           catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
         return json({ started, errors });
@@ -370,10 +433,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const stopped: string[] = [];
         await Promise.all(project.memberIds.map(async (id) => {
           const svc = services.find((s) => s.id === id);
-          if (!svc || svc.status !== "running" || !svc.rootPid || !svc.pids) return;
+          if (!svc || (svc.status !== "running" && svc.status !== "starting") || !svc.rootPid || !svc.pids) return;
           try {
             crashes.disarm(id);
-            await killTree(svc.pids);
+            await killTree(svc.pids, 3000, [process.pid], control.trackedOf(id)?.pid);
             stopped.push(id);
           } catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
@@ -433,10 +496,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const pinnedNow = created.length ? await registry.load() : pinned;
         await Promise.all(plan.startIds.map(async (id) => {
           const svc = services.find((s) => s.id === id);
-          if (svc?.status === "running") return;
+          if (svc?.status === "running" || svc?.status === "starting") return;
           const spec = pinnedNow.find((p) => p.id === id);
           if (!spec) { errors.push({ id, error: "not pinned" }); return; }
-          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
+          try { crashes.reset(id); const pid = await control.start(spec); started.push({ id, pid }); }
           catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
         const used = [...services.flatMap((s) => s.ports), ...created.map((p) => p.port)];
@@ -501,10 +564,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const started: { id: string; pid: number }[] = [];
         await Promise.all(preset.serviceIds.map(async (id) => {
           const svc = services.find((s) => s.id === id);
-          if (svc?.status === "running") return;
+          if (svc?.status === "running" || svc?.status === "starting") return;
           const spec = pinned.find((p) => p.id === id);
           if (!spec) { errors.push({ id, error: "not pinned" }); return; }
-          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
+          try { crashes.reset(id); const pid = await control.start(spec); started.push({ id, pid }); }
           catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
         if (preset.openEditor && preset.worktree) {
@@ -540,11 +603,11 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (fromRaw != null) {
           const from = Number(fromRaw);
           if (!Number.isFinite(from) || from < 0) return fail("from must be a byte offset");
-          return json(await control.tailLog(id, 200, from));
+          return json(withLevels(await control.tailLog(id, 200, from)));
         }
         const requested = Number(url.searchParams.get("lines") ?? 200);
         const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 5000) : 200;
-        return json(await control.tailLog(id, lines));
+        return json(withLevels(await control.tailLog(id, lines)));
       }
       if (method === "DELETE" && logs) {
         const id = decodeURIComponent(logs[1]);
@@ -565,15 +628,17 @@ if (import.meta.main) {
   const registry = new Registry();
   const control = new Control();
   const crashes = new CrashWatch(control);
+  const fetch = createHandler({ discover: () => realDiscover(), registry, control, crashes, cacheMs: 3000 });
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port,
-    fetch: createHandler({ discover: () => realDiscover(), registry, control, crashes }),
+    fetch,
   });
   setInterval(async () => {
     try {
-      const [running, pinned, ignored] = await Promise.all([realDiscover(), registry.load(), registry.loadIgnored()]);
-      const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
+      const { services, pinned } = await fetch.refreshSnapshot();
+      const logIds = services.filter((s) => s.id && s.hasLog && (s.status === "running" || s.status === "starting")).map((s) => s.id!);
+      await control.rotateRunning(logIds);
       const restarted = await crashes.tick(services, pinned);
       if (restarted.length) console.log(`${new Date().toISOString()} crash-restart ${restarted.join(",")}`);
     } catch {}

@@ -39,11 +39,19 @@ export type Pinned = {
 
 export type StartSpec = { id: string; cwd: string; command: string; env?: Record<string, string> };
 
+export type Tracked = {
+  id: string;
+  pid: number;
+  startedAt: number;
+  exitCode?: number;
+  exitedAt?: number;
+};
+
 export type Service = {
   id?: string;
   name: string;
   kind: Kind;
-  status: "running" | "stopped";
+  status: "running" | "stopped" | "starting";
   rootPid?: number;
   pids?: number[];
   ports: number[];
@@ -60,6 +68,9 @@ export type Service = {
   health?: { ok: boolean; status?: number; ms: number; error?: string };
   env?: Record<string, string>;
   restartOnCrash?: boolean;
+  exitCode?: number;
+  crash?: { tries: number; gaveUp: boolean };
+  errorCount?: number;
 };
 
 export type ProjectLink = { label: string; url: string };

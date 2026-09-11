@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Control, isAlive, isValidLogId, killTree } from "../lib/control";
+import { Control, isAlive, isValidLogId, killTree, LOG_MAX_BYTES } from "../lib/control";
 import { scanProcesses } from "../lib/discover";
 
 const spawned: number[] = [];
@@ -162,6 +162,59 @@ describe("Control", () => {
     const again = await control.tailLog("reset-me", 200, first.next);
     expect(again.reset).toBe(true);
     expect(again.lines.some((l) => l.includes("cleared"))).toBe(true);
+  });
+
+  test("start records a tracked pid and exit code", async () => {
+    const pid = await control.start({ id: "exit-3", cwd: home, command: "exit 3" });
+    spawned.push(pid);
+    await waitUntilDead(pid);
+    const deadline = Date.now() + 2000;
+    while (control.trackedOf("exit-3")?.exitCode == null && Date.now() < deadline) await Bun.sleep(20);
+    const t = control.trackedOf("exit-3");
+    expect(t?.exitCode).toBe(3);
+    expect(t?.exitedAt).toBeNumber();
+  });
+
+  test("killTree on a tracked process group leaves nothing alive", async () => {
+    const pid = await control.start({ id: "grp", cwd: home, command: "sleep 1000; exit 0" });
+    spawned.push(pid);
+    const sleep = await childOf(pid);
+    spawned.push(sleep);
+    const result = await killTree([pid, sleep], 3000, [process.pid], pid);
+    expect(isAlive(pid)).toBe(false);
+    expect(isAlive(sleep)).toBe(false);
+    expect(result.killed.length + result.forced.length).toBeGreaterThan(0);
+    const leftover = await new Response(Bun.spawn(["ps", "-axo", "pid=,pgid="], { stdout: "pipe" }).stdout).text();
+    const still = leftover.split("\n").filter((line) => {
+      const parts = line.trim().split(/\s+/);
+      return parts.length >= 2 && Number(parts[1]) === pid && Number(parts[0]) > 1;
+    });
+    expect(still).toEqual([]);
+  });
+
+  test("rotateRunning copies the tail aside and truncates the live file while the writer lives", async () => {
+    const pid = await control.start({ id: "chatty", cwd: home, command: "yes | head -c 6000000; sleep 30" });
+    spawned.push(pid);
+    const path = control.logPath("chatty");
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const info = await Bun.file(path).exists() ? await Bun.file(path).stat() : undefined;
+      if (info && info.size > LOG_MAX_BYTES) break;
+      await Bun.sleep(50);
+    }
+    expect((await Bun.file(path).stat()).size).toBeGreaterThan(LOG_MAX_BYTES);
+    const rotated = await control.rotateRunning(["chatty"]);
+    expect(rotated).toEqual(["chatty"]);
+    expect((await Bun.file(path).stat()).size).toBeLessThan(3 * 1024 * 1024);
+    expect(await Bun.file(`${path}.1`).exists()).toBe(true);
+    expect(isAlive(pid)).toBe(true);
+    const tail = await control.tailLog("chatty", 50);
+    expect(tail.lines.some((l) => l === "y")).toBe(true);
+    expect(tail.lines.at(-1)).toContain("rotated");
+    const yAt = tail.lines.lastIndexOf("y");
+    const rotAt = tail.lines.findIndex((l) => l.includes("rotated"));
+    expect(yAt).toBeGreaterThanOrEqual(0);
+    expect(rotAt).toBeGreaterThan(yAt);
   });
 
   test("logPath rejects ids that could leave the log directory", () => {
