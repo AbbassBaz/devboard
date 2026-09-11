@@ -196,8 +196,7 @@ API. Last run 2026-09-10: passed.
 ## For agents and contributors
 
 `AGENTS.md` is the instruction file for any coding agent. `agents/` holds scoped
-rules and role prompts. `design.md` is the UI spec. `docs/superpowers/` is the
-original design and plan, kept for history.
+rules and role prompts. `design.md` is the UI spec.
 
 ## License
 
