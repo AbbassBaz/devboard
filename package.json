@@ -10,7 +10,8 @@
     "start": "bun run server.ts",
     "dev": "bun --watch server.ts",
     "test": "bun test",
-    "devboard": "bun run bin/devboard.ts"
+    "devboard": "bun run bin/devboard.ts",
+    "setup": "bun run bin/devboard.ts install"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2"

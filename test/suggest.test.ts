@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseComposeServices, parsePackageScripts, parseProcfile, portFromCommand, suggestCommands } from "../lib/suggest";
+import { isServerScript, parseComposeServices, parsePackageScripts, parseProcfile, portFromCommand, suggestCommands } from "../lib/suggest";
 
 describe("portFromCommand", () => {
   test("reads --port, PORT=, and :port", () => {
@@ -12,12 +12,27 @@ describe("portFromCommand", () => {
 });
 
 describe("parsers", () => {
-  test("package scripts prefer dev/start/storybook", () => {
+  test("package scripts prefer dev/start/storybook and skip tools that only contain those letters", () => {
     const list = parsePackageScripts(JSON.stringify({
-      scripts: { lint: "eslint", dev: "next dev --port 3000", start: "node server", storybook: "storybook dev" },
+      scripts: {
+        lint: "eslint",
+        test: "bun test",
+        devboard: "bun run bin/devboard.ts",
+        docs: "vite --port 5173",
+        "dev:api": "bun --watch src/index.ts --port 3003",
+        dev: "next dev --port 3000",
+        start: "node server",
+        storybook: "storybook dev",
+      },
     }), "pnpm");
-    expect(list.map((s) => s.label)).toEqual(["dev", "start", "storybook"]);
+    expect(list.map((s) => s.label)).toEqual(["dev", "start", "storybook", "dev:api", "docs"]);
     expect(list[0]).toMatchObject({ command: "pnpm dev", port: 3000, source: "npm" });
+  });
+
+  test("isServerScript is about how it runs, not the script name", () => {
+    expect(isServerScript("devboard", "bun run bin/devboard.ts")).toBe(false);
+    expect(isServerScript("docs", "vite --port 5173")).toBe(true);
+    expect(isServerScript("dev:web", "anything")).toBe(true);
   });
 
   test("compose services become docker compose up", () => {

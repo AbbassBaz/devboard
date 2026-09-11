@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { collectAlerts } from "./lib/attention";
 import { Control, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
@@ -508,4 +510,10 @@ if (import.meta.main) {
     } catch {}
   }, 3000);
   console.log(`devboard → http://127.0.0.1:${server.port}`);
+  if (process.env.DEVBOARD_TRAY !== "0") {
+    const app = join(homedir(), "Applications", "Devboard.app");
+    if (existsSync(app)) {
+      Bun.spawn(["open", "-g", "-a", app], { stdout: "ignore", stderr: "ignore", stdin: "ignore" }).unref();
+    }
+  }
 }

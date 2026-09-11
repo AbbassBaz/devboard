@@ -32,7 +32,6 @@ function toast(msg) {
   const t = $("#toast"); t.textContent = msg; t.style.display = "block";
   clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.style.display = "none"), 4500);
 }
-const ENV_NOISE = /^(PATH|PWD|HOME|USER|SHELL|SHLVL|TERM|TMPDIR|OLDPWD|LOGNAME|LANG|_|XPC_|SSH_|LC_|__CF|COMMAND_MODE|TERM_PROGRAM)/;
 function envBlock(env) {
   const keys = Object.keys(env || {}).sort();
   if (!keys.length) return "none";
@@ -51,15 +50,7 @@ async function openEnv(s) {
   if (!s.rootPid) return;
   try {
     const { env } = await api("GET", `/api/env?pid=${s.rootPid}`);
-    const interesting = {};
-    const rest = {};
-    for (const [k, v] of Object.entries(env || {})) {
-      if (ENV_NOISE.test(k)) rest[k] = v;
-      else interesting[k] = v;
-    }
-    const main = envBlock(interesting);
-    const extra = Object.keys(rest).length ? `\n\n# shell / system\n${envBlock(rest)}` : "";
-    $("#envLive").textContent = main === "none" && !Object.keys(rest).length ? "none visible" : main + extra;
+    $("#envLive").textContent = envBlock(env);
   } catch (e) {
     $("#envLive").textContent = e.message;
   }

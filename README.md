@@ -7,9 +7,21 @@ start, and read logs.
 ## Run
 
     bun install
-    bun run start          # http://127.0.0.1:4242
+    bun run start          # http://127.0.0.1:4242  (opens the menu bar extra too)
     bun run dev            # same, restarts on file changes
     bun test
+    bun run bin/devboard.ts install   # once: put `devboard` on PATH, install the menu bar app
+
+After install, any terminal:
+
+    devboard               # list what's on
+    devboard start api-3003
+    devboard logs web -f
+    devboard stop-all
+    devboard up            # start the board if it is off
+    devboard tray          # show the menu bar extra
+
+`~/.local/bin` is already on your PATH. `devboard install` drops a symlink there, so the command works like `git` or `ls` — you do not type `bun run`.
 
 Start it from your normal zsh so that services launched from the page inherit
 the same PATH (fnm's node, pnpm, bun).
@@ -19,12 +31,10 @@ the same PATH (fnm's node, pnpm, bun).
 where `services.json` (pinned list), `projects.json`, `presets.json`,
 `ignored.json`, and `logs/<id>.log` live.
 
-    bun run devboard --            # list
+    bun run devboard --            # list (same as `devboard` after install)
     bun run devboard -- start api
     bun run devboard -- logs web -f
     bun run devboard -- stop-all
-
-Or `bun link` / `bun install --global` so `devboard` is on your PATH.
 
 ## What it does
 
@@ -57,8 +67,12 @@ Or `bun link` / `bun install --global` so `devboard` is on your PATH.
 - **Readiness.** Running cards with an explicit health URL are probed on each
   refresh. 2xx/3xx is ready; anything else is unhealthy. No URL means ready —
   the board does not hit `/` just to guess, so noisy dev servers stay quiet.
-- **CLI.** `devboard` (or `bun run devboard --`) lists the board and can
-  `start`, `stop`, `restart`, `logs [-f]`, `start-all`, and `stop-all`.
+- **CLI.** After `devboard install`, type `devboard` in any terminal. It lists the
+  board and can `start`, `stop`, `restart`, `logs [-f]`, `start-all`, `stop-all`,
+  `up`, and `tray`.
+- **Menu bar.** A menu extra shows how many servers are on, turns red when one is
+  unhealthy, and can start/stop, open a port, or open the board. Open at login is
+  optional. Quitting the extra does not stop your servers.
 - **Hide.** Moves a card into the collapsed Hidden list below the board, for things like
   editor helpers that happen to listen on a port. Show brings it back. Stored in
   `~/.devboard/ignored.json`.

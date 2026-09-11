@@ -26,6 +26,15 @@ export function portFromCommand(command: string): number | undefined {
   return port >= 1 && port <= 65535 ? port : undefined;
 }
 
+const PREFERRED = ["dev", "start", "storybook", "preview"];
+const PREFERRED_PREFIX = /^(dev|start|storybook|preview):/;
+const SERVER_CMD = /\b(vite|next|nuxt|remix|astro|storybook|nodemon|webpack-dev-server|wrangler)\b|--watch\b|--hot\b|--port\b|\bPORT=|\btsx watch\b|\bbun --watch\b|\bbun --hot\b/i;
+
+export function isServerScript(name: string, cmd: string): boolean {
+  if (PREFERRED.includes(name) || PREFERRED_PREFIX.test(name)) return true;
+  return SERVER_CMD.test(cmd);
+}
+
 export function parsePackageScripts(json: string, run: string): CommandSuggestion[] {
   let scripts: Record<string, string> = {};
   try {
@@ -34,10 +43,11 @@ export function parsePackageScripts(json: string, run: string): CommandSuggestio
   } catch {
     return [];
   }
-  const preferred = ["dev", "start", "storybook", "preview"];
   const names = [
-    ...preferred.filter((n) => scripts[n]),
-    ...Object.keys(scripts).filter((n) => !preferred.includes(n) && /dev|start|story/i.test(n)),
+    ...PREFERRED.filter((n) => scripts[n]),
+    ...Object.keys(scripts)
+      .filter((n) => !PREFERRED.includes(n) && isServerScript(n, scripts[n] ?? ""))
+      .sort(),
   ];
   return names.map((name) => {
     const command = `${run} ${name}`;
