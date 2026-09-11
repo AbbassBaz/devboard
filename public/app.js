@@ -151,13 +151,14 @@ function clearBusy(id) { delete busy[id]; }
 function sweepBusy() {
   for (const [id, { state, at }] of Object.entries(busy)) {
     const s = latest.find((x) => x.id === id);
-    const settled = (state === "starting" && s?.status === "running") || (state === "stopping" && (!s || s.status === "stopped"));
+    const settled = (state === "starting" && (s?.status === "running" || s?.status === "starting")) || (state === "stopping" && (!s || s.status === "stopped"));
     if (settled || Date.now() - at > 15000) delete busy[id];
   }
 }
 function rowState(s) {
   const b = busy[s.id]?.state;
   if (b) return "busy";
+  if (s.status === "starting") return "busy";
   return s.status === "running" ? "on" : "off";
 }
 function portOf(s) { return s.ports?.[0]; }
@@ -285,9 +286,10 @@ function rowHtml(s) {
   const meta = state === "on"
     ? `pid ${s.rootPid} · ${cpu.toFixed(1)}% · ${s.memMb ?? 0} MB · up ${s.uptime || ""}`
     : state === "busy"
-      ? `${b}… waiting for :${port ?? "—"}`
-      : s.pinned ? "stopped · saved" : "stopped";
-  const switchLabel = state === "busy" ? b : s.status === "running" ? `Stop ${s.name}` : `Start ${s.name}`;
+      ? `${b || "starting"}… waiting for :${port ?? "—"}`
+      : s.exitCode != null ? `stopped · exit ${s.exitCode}` : s.pinned ? "stopped · saved" : "stopped";
+  const switchLabel = state === "busy" ? (b || "starting") : s.status === "running" ? `Stop ${s.name}` : `Start ${s.name}`;
+  const crashPill = s.crash?.gaveUp ? `<span class="err-pill">restart failed ×5</span>` : "";
   return `<div class="row ${state}${sel === s.id ? " sel" : ""}" data-id="${esc(s.id)}" data-act="select">
     <span class="dot ${state}"></span>
     <span class="row-main">
@@ -295,7 +297,7 @@ function rowHtml(s) {
       <span class="row-meta">${esc(meta)}</span>
     </span>
     <span class="row-right">
-      ${errs ? `<span class="err-pill">${errs}</span>` : ""}
+      ${crashPill}${errs ? `<span class="err-pill">${errs}</span>` : ""}
       <span class="bar"><i class="${cpu > 4.5 ? "hot" : ""}" style="width:${barW}%"></i></span>
     </span>
     <button class="sw ${state}" role="switch" aria-checked="${s.status === "running"}" title="${esc(switchLabel)}" data-act="toggle" ${b ? "disabled" : ""}><span class="knob"></span></button>
@@ -339,8 +341,8 @@ function paintLogHead() {
   const state = rowState(s);
   const bsy = busy[s.id]?.state;
   const port = portOf(s);
-  const stateLabel = state === "on" ? "running" : state === "busy" ? bsy : "stopped";
-  const primaryLabel = state === "busy" ? `${bsy}…` : state === "on" ? "Restart" : "Start";
+  const stateLabel = state === "on" ? "running" : state === "busy" ? (bsy || "starting") : "stopped";
+  const primaryLabel = state === "busy" ? `${bsy || "starting"}…` : state === "on" ? "Restart" : "Start";
   const primaryClass = state === "busy" ? "busy" : state === "on" ? "restart" : "";
   const items = logMenuItems(s);
   a.innerHTML = `
@@ -508,7 +510,7 @@ function moveSel(dir) {
 async function toggle(s) {
   if (!s || busy[s.id]) return;
   try {
-    if (s.status === "running") {
+    if (s.status === "running" || s.status === "starting") {
       setBusy(s.id, "stopping");
       render();
       if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid });

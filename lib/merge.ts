@@ -1,5 +1,5 @@
 import { pinnedId } from "./registry";
-import type { Pinned, RunningService, Service } from "./types";
+import type { Pinned, RunningService, Service, Tracked } from "./types";
 
 export function matchPinned(running: RunningService, pinned: Pinned[]): Pinned | undefined {
   if (!running.cwd) return undefined;
@@ -15,6 +15,7 @@ export function mergeServices(
   pinned: Pinned[],
   hasLog: (id: string) => boolean,
   ignored: ReadonlySet<string> = new Set(),
+  tracked: Tracked[] = [],
 ): Service[] {
   const matched = new Set<string>();
   const rows: Service[] = running.map((r) => {
@@ -43,23 +44,28 @@ export function mergeServices(
       ...(p?.restartOnCrash ? { restartOnCrash: true } : {}),
     };
   });
+  const byId = new Map(tracked.map((t) => [t.id, t]));
   for (const p of pinned) {
     if (matched.has(p.id)) continue;
+    const t = byId.get(p.id);
+    const starting = t != null && t.exitedAt == null;
     rows.push({
       id: p.id,
       name: p.name,
       kind: "dev",
-      status: "stopped",
+      status: starting ? "starting" : "stopped",
+      ...(starting && t ? { rootPid: t.pid, pids: [t.pid] } : {}),
       ports: [p.port],
       cwd: p.cwd,
       command: p.command,
       pinned: true,
       hasLog: hasLog(p.id),
       hidden: ignored.has(p.id),
-      readiness: "stopped",
+      readiness: starting ? "starting" : "stopped",
       ...(p.healthUrl ? { healthUrl: p.healthUrl } : {}),
       ...(p.env && Object.keys(p.env).length ? { env: p.env } : {}),
       ...(p.restartOnCrash ? { restartOnCrash: true } : {}),
+      ...(!starting && t?.exitCode != null ? { exitCode: t.exitCode } : {}),
     });
   }
   return rows;

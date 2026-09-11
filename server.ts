@@ -8,11 +8,11 @@ import { discover as realDiscover } from "./lib/discover";
 import { parseEnvText, readProcessEnv } from "./lib/env";
 import { applyReadiness, firstFreePort } from "./lib/health";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
-import { parseLinks, projectViews, pruneProjectMembers, servicesInFolder } from "./lib/projects";
+import { parseLinks, projectViews, servicesInFolder } from "./lib/projects";
 import { Registry } from "./lib/registry";
 import { CrashWatch } from "./lib/restarts";
 import { suggestCommands } from "./lib/suggest";
-import type { Pinned, ProjectLink, RunningService, StartSpec, WorktreeInfo } from "./lib/types";
+import type { Pinned, ProjectLink, RunningService, Service, StartSpec, WorktreeInfo } from "./lib/types";
 import { createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
@@ -65,10 +65,18 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   const findRunning = async (rootPid: number) => (await deps.discover()).find((s) => s.rootPid === rootPid);
 
   const snapshot = async () => {
+    await control.hydrate();
+    control.reconcile();
     const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
-    const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
+    const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored, control.listTracked());
     return { running, pinned, services };
   };
+
+  const withCrash = (services: Service[]) =>
+    services.map((s) => {
+      const crash = s.id ? crashes.info(s.id) : undefined;
+      return crash ? { ...s, crash } : s;
+    });
 
   const folderMembers = async (folder: string): Promise<string[]> => {
     const { running, services } = await snapshot();
@@ -165,14 +173,9 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       }
 
       if (method === "GET" && pathname === "/api/services") {
-        const [running, pinned, ignored] = await Promise.all([deps.discover(), registry.load(), registry.loadIgnored()]);
-        let services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
-        services = await applyReadiness(services, pinned);
-        await crashes.tick(services, pinned);
-        const known = new Set(services.map((s) => s.id).filter((id): id is string => !!id));
-        const stored = await registry.loadProjects();
-        const projects = pruneProjectMembers(stored, known);
-        if (projects.some((p, i) => p.memberIds.length !== stored[i]?.memberIds.length)) await registry.saveProjects(projects);
+        const { pinned, services: merged } = await snapshot();
+        const services = withCrash(await applyReadiness(merged, pinned));
+        const projects = await registry.loadProjects();
         return json({
           services,
           projects: projectViews(projects, services),
@@ -184,11 +187,14 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       if (method === "POST" && pathname === "/api/kill") {
         const { rootPid } = await readBody(req);
         if (typeof rootPid !== "number") return fail("rootPid required");
+        await control.hydrate();
         const svc = await findRunning(rootPid);
-        if (!svc) return fail("no running service with that rootPid", 404);
-        const pinned = matchPinned(svc, await registry.load());
-        crashes.disarm(pinned?.id ?? logIdFor(svc));
-        return json(await killTree(svc.pids));
+        const tracked = control.listTracked().find((t) => t.pid === rootPid && t.exitedAt == null);
+        if (!svc && !tracked) return fail("no running service with that rootPid", 404);
+        const pinned = svc ? matchPinned(svc, await registry.load()) : (await registry.load()).find((p) => p.id === tracked?.id);
+        crashes.disarm(pinned?.id ?? (svc ? logIdFor(svc) : tracked!.id));
+        const pids = svc?.pids ?? (tracked ? [tracked.pid] : []);
+        return json(await killTree(pids, 3000, [process.pid], tracked?.pid));
       }
 
       if (method === "POST" && pathname === "/api/start") {
@@ -196,10 +202,11 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (typeof id !== "string") return fail("id required");
         const pinned = (await registry.load()).find((p) => p.id === id);
         if (!pinned) return fail("no pinned service with that id", 404);
+        await control.hydrate();
         const alreadyRunning = (await deps.discover()).some((s) => matchPinned(s, [pinned]));
-        if (alreadyRunning) return fail("already running", 409);
+        if (alreadyRunning || control.isTrackedAlive(id)) return fail("already running", 409);
+        crashes.reset(pinned.id);
         const pid = await control.start(pinned);
-        crashes.arm(pinned.id);
         return json({ pid });
       }
 
@@ -223,9 +230,15 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         } else {
           return fail("rootPid or id required");
         }
-        const result = pids.length ? await killTree(pids) : { killed: [], forced: [] };
+        await control.hydrate();
+        control.reconcile();
+        const groupPid = control.isTrackedAlive(spec.id) ? control.trackedOf(spec.id)?.pid : undefined;
+        const killPids = pids.length ? pids : (groupPid ? [groupPid] : []);
+        const result = killPids.length
+          ? await killTree(killPids, 3000, [process.pid], groupPid)
+          : { killed: [], forced: [] };
+        crashes.reset(spec.id);
         const pid = await control.start(spec);
-        crashes.arm(spec.id);
         return json({ ...result, pid });
       }
 
@@ -352,10 +365,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const started: { id: string; pid: number }[] = [];
         await Promise.all(project.memberIds.map(async (id) => {
           const svc = services.find((s) => s.id === id);
-          if (!svc || svc.status === "running") return;
+          if (!svc || svc.status === "running" || svc.status === "starting") return;
           const spec = pinned.find((p) => p.id === id);
           if (!spec) { errors.push({ id, error: "not pinned" }); return; }
-          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
+          try { crashes.reset(id); const pid = await control.start(spec); started.push({ id, pid }); }
           catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
         return json({ started, errors });
@@ -370,10 +383,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const stopped: string[] = [];
         await Promise.all(project.memberIds.map(async (id) => {
           const svc = services.find((s) => s.id === id);
-          if (!svc || svc.status !== "running" || !svc.rootPid || !svc.pids) return;
+          if (!svc || (svc.status !== "running" && svc.status !== "starting") || !svc.rootPid || !svc.pids) return;
           try {
             crashes.disarm(id);
-            await killTree(svc.pids);
+            await killTree(svc.pids, 3000, [process.pid], control.trackedOf(id)?.pid);
             stopped.push(id);
           } catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
@@ -433,10 +446,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const pinnedNow = created.length ? await registry.load() : pinned;
         await Promise.all(plan.startIds.map(async (id) => {
           const svc = services.find((s) => s.id === id);
-          if (svc?.status === "running") return;
+          if (svc?.status === "running" || svc?.status === "starting") return;
           const spec = pinnedNow.find((p) => p.id === id);
           if (!spec) { errors.push({ id, error: "not pinned" }); return; }
-          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
+          try { crashes.reset(id); const pid = await control.start(spec); started.push({ id, pid }); }
           catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
         const used = [...services.flatMap((s) => s.ports), ...created.map((p) => p.port)];
@@ -501,10 +514,10 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const started: { id: string; pid: number }[] = [];
         await Promise.all(preset.serviceIds.map(async (id) => {
           const svc = services.find((s) => s.id === id);
-          if (svc?.status === "running") return;
+          if (svc?.status === "running" || svc?.status === "starting") return;
           const spec = pinned.find((p) => p.id === id);
           if (!spec) { errors.push({ id, error: "not pinned" }); return; }
-          try { const pid = await control.start(spec); crashes.arm(id); started.push({ id, pid }); }
+          try { crashes.reset(id); const pid = await control.start(spec); started.push({ id, pid }); }
           catch (e) { errors.push({ id, error: e instanceof Error ? e.message : String(e) }); }
         }));
         if (preset.openEditor && preset.worktree) {
@@ -572,8 +585,10 @@ if (import.meta.main) {
   });
   setInterval(async () => {
     try {
+      await control.hydrate();
+      control.reconcile();
       const [running, pinned, ignored] = await Promise.all([realDiscover(), registry.load(), registry.loadIgnored()]);
-      const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored);
+      const services = mergeServices(running, pinned, (id) => control.hasLog(id), ignored, control.listTracked());
       const restarted = await crashes.tick(services, pinned);
       if (restarted.length) console.log(`${new Date().toISOString()} crash-restart ${restarted.join(",")}`);
     } catch {}

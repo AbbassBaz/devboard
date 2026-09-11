@@ -99,8 +99,8 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 - Row: `10px 1fr auto auto`, gap 10, margin `0 6px`, padding `7px 8px 7px 10px`, radius 6. Selected `#242932`, hover `#23272e`. Click selects.
   - Dot 8px: running `#4fb477` + ring; busy `#d4a72c` pulse `.8s`; stopped `#3a3e46`.
   - Name 500 (`#8b919c` if stopped) + port link `:3003` → `http://localhost:PORT`.
-  - Meta mono 11 dim: running `pid · cpu% · MB · up`; busy `starting… waiting for :PORT`; stopped `stopped · saved` / `stopped`.
-  - Error pill only if >0: 600 11 `#e5534b` on `rgba(229,83,75,.12)`.
+  - Meta mono 11 dim: running `pid · cpu% · MB · up`; busy/starting `starting… waiting for :PORT`; stopped `stopped · saved` / `stopped` / `stopped · exit N` when a tracked process exited with that code.
+  - Error pill only if >0: 600 11 `#e5534b` on `rgba(229,83,75,.12)`. `restart failed ×5` in the same token when crash-restart gave up.
   - CPU bar 40×3, track `#2a2e35`, fill accent (error above 75% of scale). Width `cpu/6*100%`, capped.
   - Switch 30×16: on green / knob `#0f1a14` +14px; busy amber wash, `cursor: progress`; off `#23272e` / `#3a3e46` / dim. Same start / pin-then-kill as today. `stopPropagation` — do not change selection.
 - System `<details>` collapsed: hollow dot, name + ports, ellipsized command, `kill` → confirm → `POST /api/kill`. Hidden cards stay in a collapsed Hidden group.

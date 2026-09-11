@@ -1,8 +1,8 @@
 # Implementation log
 
 Plan: `suggestions/final-plan.md`  
-Branch: `plan/tier-1`  
-Baseline: `bun test` — 133 pass, 0 fail (2026-09-11). No linter.
+Branch: `plan/tier-2` (Tier 1 merged to main as `327e050`)  
+Baseline: `bun test` — 133 pass, 0 fail (2026-09-11). After Tier 1: 144. No linter.
 
 Precondition: landed uncommitted fonts, fixture scrub, project links, and worktree pin copying as `91f5dc7`.
 
@@ -11,7 +11,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-01 | Reject cross-origin and DNS-rebinding requests to the API | done | Gate in `handle` before `route`. Tray already sends `application/json`. Page and smoke now send JSON on DELETE too. Smoke not re-run: real board on :4242. |
 | F-02 | Fix the edit sheets losing their id | done | `openSheet` now hides without resetting edit ids. Browser: Edit dashboard kept `editingId=dashboard-3001` and Save PUT succeeded; New project had null id; Edit project kept `coreagentshub`; close then Add/New project did not leak an id. |
 | F-03 | Add a LICENSE file | done | MIT, copyright AbbassBaz 2026. `package.json` license field set. README License section names the OFL 1.1 fonts. |
-| F-04 | Track the processes devboard spawns so status is real | todo | Tier 2 — waiting |
+| F-04 | Track the processes devboard spawns so status is real | done | `Tracked` in `state.json`. Unmatched live pid → `starting`; exit codes and `crash.gaveUp` on the row. GET `/api/services` no longer ticks crashes or writes projects. 152 pass. |
 | F-05 | Contain log ids to the log directory | done | `isValidLogId` + resolved-path check. GET/DELETE `..%2F..%2Foutside` is 400; fixture unchanged. |
 | F-06 | Make the tray build optional in `install` | done | No-swift PATH prints the skip line and exits 0 after the symlink. `tray:build` script added. |
 | F-07 | CI on a macOS runner, with a smoke script that cannot touch a real board | done | macos-14 workflow + `.bun-version` 1.2.18. Locally, busy :4242 makes smoke abort before any API call; sentinel survived. |

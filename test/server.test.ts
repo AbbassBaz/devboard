@@ -1,10 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Control, isAlive } from "../lib/control";
-import { scanProcesses } from "../lib/discover";
+import { Control, isAlive, killTree } from "../lib/control";
+import { discover, scanProcesses } from "../lib/discover";
 import { Registry } from "../lib/registry";
+import { CrashWatch } from "../lib/restarts";
 import type { Process, RunningService, Service } from "../lib/types";
 import { createHandler } from "../server";
 
@@ -477,5 +478,132 @@ describe("request gate", () => {
   test("POST with no Origin and JSON passes", async () => {
     const res = await call("POST", "/api/ignore", { id: "gate-cli" });
     expect(res.status).toBe(200);
+  });
+});
+
+describe("tracked process status", () => {
+  const trackHome = realpathSync(mkdtempSync(join(tmpdir(), "devboard-track-")));
+  const trackRegistry = new Registry(trackHome);
+  const trackControl = new Control(trackHome);
+  const trackCrashes = new CrashWatch(trackControl);
+  const trackHandle = createHandler({
+    discover,
+    registry: trackRegistry,
+    control: trackControl,
+    crashes: trackCrashes,
+    allowedHosts: ["devboard.test"],
+  });
+  const trackCall = (method: string, path: string, body?: unknown) =>
+    trackHandle(new Request(`http://devboard.test${path}`, {
+      method,
+      headers: method === "GET" ? undefined : { "content-type": "application/json" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    }));
+
+  const TRACK_PORT = 39880;
+  const serveCmd = `sleep 5; bun -e 'Bun.serve({hostname:"127.0.0.1",port:${TRACK_PORT},fetch(){return new Response("ok")}});setInterval(()=>{},1e6)'; exit 0`;
+
+  afterAll(async () => {
+    const t = trackControl.trackedOf("boot-39880");
+    if (t) await killTree([t.pid], 500, [process.pid], t.pid);
+    rmSync(trackHome, { recursive: true, force: true });
+  });
+
+  test("start shows starting then running, refuses a second start, and records exit codes", async () => {
+    await trackRegistry.save([{
+      id: "boot-39880", name: "boot", cwd: trackHome, command: serveCmd, port: TRACK_PORT,
+    }]);
+    const started = await trackCall("POST", "/api/start", { id: "boot-39880" });
+    expect(started.status).toBe(200);
+    const { pid } = await started.json();
+    spawned.push(pid);
+
+    const early = await (await trackCall("GET", "/api/services")).json();
+    expect(early.services.find((s: Service) => s.id === "boot-39880")).toMatchObject({
+      status: "starting", readiness: "starting", rootPid: pid,
+    });
+    expect((await trackCall("POST", "/api/start", { id: "boot-39880" })).status).toBe(409);
+
+    const deadline = Date.now() + 12000;
+    let row: Service | undefined;
+    while (Date.now() < deadline) {
+      try {
+        if ((await fetch(`http://127.0.0.1:${TRACK_PORT}/`)).ok) break;
+      } catch {}
+      await Bun.sleep(100);
+    }
+    while (Date.now() < deadline) {
+      row = (await (await trackCall("GET", "/api/services")).json()).services.find((s: Service) => s.id === "boot-39880");
+      if (row?.status === "running") break;
+      await Bun.sleep(100);
+    }
+    expect(row).toMatchObject({ status: "running", pinned: true, ports: [TRACK_PORT] });
+
+    await trackRegistry.add({ name: "die", cwd: trackHome, command: "exit 3", port: 39881 });
+    const died = await trackCall("POST", "/api/start", { id: "die-39881" });
+    expect(died.status).toBe(200);
+    const { pid: diePid } = await died.json();
+    spawned.push(diePid);
+    const dieDeadline = Date.now() + 3000;
+    let dieRow: Service | undefined;
+    while (Date.now() < dieDeadline) {
+      dieRow = (await (await trackCall("GET", "/api/services")).json()).services.find((s: Service) => s.id === "die-39881");
+      if (dieRow?.status === "stopped" && dieRow.exitCode === 3) break;
+      await Bun.sleep(40);
+    }
+    expect(dieRow).toMatchObject({ status: "stopped", exitCode: 3 });
+  }, 20000);
+
+  test("six crash ticks against exit 1 set crash.gaveUp on the row", async () => {
+    await trackRegistry.add({
+      name: "boom", cwd: trackHome, command: "exit 1", port: 39882, restartOnCrash: true,
+    });
+    const start = await trackCall("POST", "/api/start", { id: "boom-39882" });
+    expect(start.status).toBe(200);
+    spawned.push((await start.json()).pid);
+    const pinned = (await trackRegistry.load()).find((p) => p.id === "boom-39882")!;
+    let now = 0;
+    for (let i = 0; i < 6; i++) {
+      const wait = Date.now() + 2000;
+      let row: Service | undefined;
+      while (Date.now() < wait) {
+        row = (await (await trackCall("GET", "/api/services")).json()).services.find((s: Service) => s.id === "boom-39882");
+        if (row?.status === "stopped" && row.exitCode === 1) break;
+        await Bun.sleep(30);
+      }
+      expect(row).toMatchObject({ status: "stopped", exitCode: 1 });
+      await trackCrashes.tick([row!], [pinned], now);
+      now += 60_000;
+    }
+    const body = await (await trackCall("GET", "/api/services")).json();
+    expect(body.services.find((s: Service) => s.id === "boom-39882")?.crash).toEqual({ tries: 5, gaveUp: true });
+  });
+
+  test("repeated GET /api/services writes no registry file", async () => {
+    const quietHome = realpathSync(mkdtempSync(join(tmpdir(), "devboard-quiet-")));
+    const quietRegistry = new Registry(quietHome);
+    const quietControl = new Control(quietHome);
+    const quietHandle = createHandler({
+      discover: async () => [],
+      registry: quietRegistry,
+      control: quietControl,
+      allowedHosts: ["devboard.test"],
+    });
+    await quietRegistry.save([{ id: "quiet-1", name: "quiet", cwd: quietHome, command: "true", port: 1 }]);
+    const names = ["services.json", "projects.json", "ignored.json", "presets.json", "state.json"];
+    const before = Object.fromEntries(names.map((n) => {
+      try { return [n, statSync(join(quietHome, n)).mtimeMs]; } catch { return [n, null]; }
+    }));
+    const listed = new Set(readdirSync(quietHome));
+    const get = (path: string) => quietHandle(new Request(`http://devboard.test${path}`));
+    expect((await get("/api/services")).status).toBe(200);
+    expect((await get("/api/services")).status).toBe(200);
+    for (const n of names) {
+      let after: number | null = null;
+      try { after = statSync(join(quietHome, n)).mtimeMs; } catch { after = null; }
+      expect(after).toBe(before[n]);
+    }
+    expect(readdirSync(quietHome).filter((n) => !listed.has(n))).toEqual([]);
+    rmSync(quietHome, { recursive: true, force: true });
   });
 });

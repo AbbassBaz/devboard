@@ -71,4 +71,19 @@ describe("mergeServices", () => {
     const row = mergeServices([], [pinned], () => false)[0];
     expect(row).toMatchObject({ env: { FOO: "1" }, restartOnCrash: true });
   });
+
+  test("a live tracked pid with no listener is starting", () => {
+    const row = mergeServices([], [pinnedApi], () => false, new Set(), [
+      { id: "core-api-3003", pid: 4242, startedAt: 1 },
+    ])[0];
+    expect(row).toMatchObject({ status: "starting", readiness: "starting", rootPid: 4242 });
+    expect(row.exitCode).toBeUndefined();
+  });
+
+  test("a recorded non-zero exit is carried on the stopped row", () => {
+    const row = mergeServices([], [pinnedApi], () => false, new Set(), [
+      { id: "core-api-3003", pid: 9, startedAt: 1, exitCode: 3, exitedAt: 2 },
+    ])[0];
+    expect(row).toMatchObject({ status: "stopped", exitCode: 3 });
+  });
 });

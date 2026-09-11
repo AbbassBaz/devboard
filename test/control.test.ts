@@ -164,6 +164,34 @@ describe("Control", () => {
     expect(again.lines.some((l) => l.includes("cleared"))).toBe(true);
   });
 
+  test("start records a tracked pid and exit code", async () => {
+    const pid = await control.start({ id: "exit-3", cwd: home, command: "exit 3" });
+    spawned.push(pid);
+    await waitUntilDead(pid);
+    const deadline = Date.now() + 2000;
+    while (control.trackedOf("exit-3")?.exitCode == null && Date.now() < deadline) await Bun.sleep(20);
+    const t = control.trackedOf("exit-3");
+    expect(t?.exitCode).toBe(3);
+    expect(t?.exitedAt).toBeNumber();
+  });
+
+  test("killTree on a tracked process group leaves nothing alive", async () => {
+    const pid = await control.start({ id: "grp", cwd: home, command: "sleep 1000; exit 0" });
+    spawned.push(pid);
+    const sleep = await childOf(pid);
+    spawned.push(sleep);
+    const result = await killTree([pid, sleep], 3000, [process.pid], pid);
+    expect(isAlive(pid)).toBe(false);
+    expect(isAlive(sleep)).toBe(false);
+    expect(result.killed.length + result.forced.length).toBeGreaterThan(0);
+    const leftover = await new Response(Bun.spawn(["ps", "-axo", "pid=,pgid="], { stdout: "pipe" }).stdout).text();
+    const still = leftover.split("\n").filter((line) => {
+      const parts = line.trim().split(/\s+/);
+      return parts.length >= 2 && Number(parts[1]) === pid && Number(parts[0]) > 1;
+    });
+    expect(still).toEqual([]);
+  });
+
   test("logPath rejects ids that could leave the log directory", () => {
     expect(isValidLogId("echo-1")).toBe(true);
     expect(isValidLogId("devboard-3999")).toBe(true);

@@ -2,7 +2,7 @@ import { mkdir, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { assignMember, pruneProjectMembers, removeMember, renameMember } from "./projects";
-import type { Pinned, Preset, Project, ProjectLink, RunningService } from "./types";
+import type { Pinned, Preset, Project, ProjectLink, RunningService, Tracked } from "./types";
 
 export const DEVBOARD_HOME = process.env.DEVBOARD_HOME ?? join(homedir(), ".devboard");
 
@@ -209,6 +209,24 @@ export class Registry {
     list.push(preset);
     await this.savePresets(list);
     return preset;
+  }
+
+  get statePath(): string {
+    return join(this.home, "state.json");
+  }
+
+  async loadTracked(): Promise<Tracked[]> {
+    const file = Bun.file(this.statePath);
+    if (!(await file.exists())) return [];
+    const raw = (await file.json()) as { tracked?: Tracked[] } | Tracked[];
+    return Array.isArray(raw) ? raw : raw.tracked ?? [];
+  }
+
+  async saveTracked(list: Tracked[]): Promise<void> {
+    await mkdir(this.home, { recursive: true });
+    const tmp = `${this.statePath}.tmp`;
+    await Bun.write(tmp, JSON.stringify(list, null, 2) + "\n");
+    await rename(tmp, this.statePath);
   }
 
   async deletePreset(id: string): Promise<boolean> {

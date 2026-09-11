@@ -3,8 +3,8 @@ import { closeSync, existsSync, fstatSync, openSync, writeSync } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { mergeEnv } from "./env";
-import { DEVBOARD_HOME } from "./registry";
-import type { StartSpec } from "./types";
+import { DEVBOARD_HOME, Registry } from "./registry";
+import type { StartSpec, Tracked } from "./types";
 
 export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 export const LOG_KEEP_BYTES = 2 * 1024 * 1024;
@@ -34,7 +34,11 @@ export async function killTree(
   pids: number[],
   graceMs = 3000,
   protectedPids: number[] = [process.pid],
+  groupPid?: number,
 ): Promise<{ killed: number[]; forced: number[] }> {
+  if (groupPid && groupPid > 1 && !protectedPids.includes(groupPid)) {
+    try { process.kill(-groupPid, "SIGTERM"); } catch {}
+  }
   const targets = [...new Set(pids)].filter((p) => p > 1 && !protectedPids.includes(p));
   for (const p of targets) signal(p, "SIGTERM");
   const deadline = Date.now() + graceMs;
@@ -43,12 +47,21 @@ export async function killTree(
     await Bun.sleep(200);
     alive = alive.filter(isAlive);
   }
+  if (groupPid && groupPid > 1 && !protectedPids.includes(groupPid) && isAlive(groupPid)) {
+    try { process.kill(-groupPid, "SIGKILL"); } catch {}
+  }
   for (const p of alive) signal(p, "SIGKILL");
   return { killed: targets.filter((p) => !alive.includes(p)), forced: alive };
 }
 
 export class Control {
-  constructor(private readonly home: string = DEVBOARD_HOME) {}
+  private readonly registry: Registry;
+  private readonly tracked = new Map<string, Tracked>();
+  private loaded = false;
+
+  constructor(private readonly home: string = DEVBOARD_HOME, registry?: Registry) {
+    this.registry = registry ?? new Registry(home);
+  }
 
   get logDir(): string {
     return join(this.home, "logs");
@@ -78,7 +91,58 @@ export class Control {
     return true;
   }
 
+  async hydrate(): Promise<void> {
+    if (this.loaded) return;
+    for (const t of await this.registry.loadTracked()) this.tracked.set(t.id, t);
+    this.loaded = true;
+    this.reconcile();
+  }
+
+  reconcile(): void {
+    let dirty = false;
+    for (const t of this.tracked.values()) {
+      if (t.exitedAt != null) continue;
+      if (isAlive(t.pid)) continue;
+      t.exitedAt = Date.now();
+      dirty = true;
+    }
+    if (dirty) void this.persist();
+  }
+
+  listTracked(): Tracked[] {
+    return [...this.tracked.values()];
+  }
+
+  trackedOf(id: string): Tracked | undefined {
+    return this.tracked.get(id);
+  }
+
+  isTrackedAlive(id: string): boolean {
+    const t = this.tracked.get(id);
+    if (!t || t.exitedAt != null) return false;
+    return isAlive(t.pid);
+  }
+
+  private async persist(): Promise<void> {
+    await this.registry.saveTracked(this.listTracked());
+  }
+
+  private remember(id: string, pid: number): void {
+    const rec: Tracked = { id, pid, startedAt: Date.now() };
+    this.tracked.set(id, rec);
+    void this.persist();
+  }
+
+  private markExit(id: string, pid: number, code: number | null): void {
+    const cur = this.tracked.get(id);
+    if (!cur || cur.pid !== pid) return;
+    cur.exitCode = code ?? 0;
+    cur.exitedAt = Date.now();
+    void this.persist();
+  }
+
   async start(spec: StartSpec): Promise<number> {
+    await this.hydrate();
     const cwdInfo = await stat(spec.cwd).catch(() => undefined);
     if (!cwdInfo?.isDirectory()) throw new Error(`working directory does not exist: ${spec.cwd}`);
     await mkdir(this.logDir, { recursive: true });
@@ -94,8 +158,10 @@ export class Control {
         env: mergeEnv(process.env, spec.env),
       });
       child.on("error", () => {});
-      child.unref();
       if (child.pid === undefined) throw new Error(`failed to start: ${spec.command}`);
+      this.remember(spec.id, child.pid);
+      child.on("exit", (code) => this.markExit(spec.id, child.pid!, code));
+      child.unref();
       return child.pid;
     } finally {
       closeSync(fd); // the child holds its own descriptor

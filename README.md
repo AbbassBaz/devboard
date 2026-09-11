@@ -81,7 +81,6 @@ Requests whose Host or Origin is not loopback (`127.0.0.1`, `localhost`, `::1`),
 
 ## Known issues
 
-- A server that takes a while to bind shows as stopped until a listener appears. `POST /api/start` can double-start during that window.
 - The 5 MB log cap is enforced at start, not while a chatty server is running.
 
 ## Smoke

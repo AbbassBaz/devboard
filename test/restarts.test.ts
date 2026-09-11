@@ -39,4 +39,22 @@ describe("CrashWatch", () => {
     watch.disarm("echo-1");
     expect(await watch.tick([stopped], [pinned])).toEqual([]);
   });
+
+  test("uses a tracked non-zero exit and gives up after five restarts", async () => {
+    const home = mkdtempSync(join(tmpdir(), "devboard-cr-"));
+    const control = new Control(home);
+    const watch = new CrashWatch(control);
+    const pinned: Pinned = { id: "boom-1", name: "boom", cwd: home, command: "exit 1", port: 1, restartOnCrash: true };
+    watch.arm("boom-1");
+    let now = 0;
+    for (let i = 0; i < 6; i++) {
+      const row: Service = {
+        id: "boom-1", name: "boom", kind: "dev", status: "stopped", ports: [1],
+        pinned: true, hasLog: true, hidden: false, readiness: "stopped", restartOnCrash: true, exitCode: 1,
+      };
+      await watch.tick([row], [pinned], now);
+      now += 60_000;
+    }
+    expect(watch.info("boom-1")).toEqual({ tries: 5, gaveUp: true });
+  });
 });

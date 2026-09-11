@@ -25,7 +25,9 @@ export function healthUrlFor(s: Service, pinned: Pinned[]): string | undefined {
 export async function applyReadiness(services: Service[], pinned: Pinned[]): Promise<Service[]> {
   return Promise.all(
     services.map(async (s) => {
-      if (s.kind !== "dev" || s.status !== "running") return { ...s, readiness: s.status === "stopped" ? "stopped" as const : s.readiness };
+      if (s.kind !== "dev" || s.status !== "running") {
+        return { ...s, readiness: s.status === "stopped" ? "stopped" as const : s.status === "starting" ? "starting" as const : s.readiness };
+      }
       const url = healthUrlFor(s, pinned);
       if (!url) return { ...s, readiness: "ready" as const };
       const health = await probe(url);
