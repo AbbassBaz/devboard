@@ -26,6 +26,27 @@ export function formatEnv(env: Record<string, string> | undefined): string {
     .join("\n");
 }
 
+const SECRET_KEY = /(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE)/i;
+
+export function maskEnv(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (SECRET_KEY.test(key)) {
+      out[key] = "••••";
+      continue;
+    }
+    try {
+      const url = new URL(value);
+      if (url.password) {
+        out[key] = value.replace(`:${url.password}@`, ":••••@");
+        continue;
+      }
+    } catch {}
+    out[key] = value;
+  }
+  return out;
+}
+
 export function mergeEnv(base: NodeJS.ProcessEnv, extra?: Record<string, string>): NodeJS.ProcessEnv {
   if (!extra || !Object.keys(extra).length) return { ...base };
   return { ...base, ...extra };

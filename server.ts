@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { collectAlerts } from "./lib/attention";
 import { Control, isValidLogId, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
-import { parseEnvText, readProcessEnv } from "./lib/env";
+import { maskEnv, parseEnvText, readProcessEnv as readLiveEnv } from "./lib/env";
 import { applyReadiness, firstFreePort } from "./lib/health";
 import { classifyLine, countErrors } from "./lib/logs";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
@@ -32,6 +32,7 @@ export type Deps = {
   allowedHosts?: string[];
   snapshot?: () => Promise<BoardSnapshot>;
   cacheMs?: number;
+  readProcessEnv?: (pid: number) => Promise<Record<string, string>>;
 };
 
 export type BoardHandler = ((req: Request) => Promise<Response>) & {
@@ -224,7 +225,9 @@ export function createHandler(deps: Deps): BoardHandler {
 
       if (method === "GET" && pathname === "/api/services") {
         const { pinned, services: merged } = await snapshot();
-        const services = await withErrorCounts(withCrash(await applyReadiness(merged, pinned)));
+        const services = (await withErrorCounts(withCrash(await applyReadiness(merged, pinned)))).map((s) =>
+          s.env ? { ...s, env: maskEnv(s.env) } : s,
+        );
         const projects = await registry.loadProjects();
         return json({
           services,
@@ -293,6 +296,10 @@ export function createHandler(deps: Deps): BoardHandler {
       }
 
       const editPinned = /^\/api\/pinned\/([^/]+)$/.exec(pathname);
+      if (method === "GET" && editPinned) {
+        const pinned = (await registry.load()).find((p) => p.id === decodeURIComponent(editPinned[1]));
+        return pinned ? json({ pinned }) : fail("no pinned service with that id", 404);
+      }
       if ((method === "POST" && pathname === "/api/pinned") || (method === "PUT" && editPinned)) {
         const body = await readBody(req);
         const { name, cwd, command, port, healthUrl } = body;
@@ -585,7 +592,13 @@ export function createHandler(deps: Deps): BoardHandler {
       if (method === "GET" && pathname === "/api/env") {
         const pid = Number(url.searchParams.get("pid"));
         if (!Number.isInteger(pid) || pid <= 1) return fail("pid required");
-        return json({ env: await readProcessEnv(pid) });
+        await control.hydrate();
+        const running = await deps.discover();
+        const known = running.some((s) => s.rootPid === pid || s.pids.includes(pid))
+          || control.listTracked().some((t) => t.pid === pid && t.exitedAt == null);
+        if (!known) return fail("no service with that pid", 404);
+        const env = await (deps.readProcessEnv ?? readLiveEnv)(pid);
+        return json({ env: url.searchParams.get("reveal") === "1" ? env : maskEnv(env) });
       }
 
       if (method === "POST" && pathname === "/api/ports/next") {

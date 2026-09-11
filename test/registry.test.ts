@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Registry, pinnedId, slugify } from "../lib/registry";
@@ -89,6 +89,12 @@ describe("Registry", () => {
     const text = await Bun.file(registry.path).text();
     expect(text.endsWith("\n")).toBe(true);
     expect(JSON.parse(text)).toHaveLength(1);
+  });
+
+  test("a fresh home is 0700 and registry files are 0600", async () => {
+    await registry.save([{ id: "a-1", name: "a", cwd: "/tmp", command: "true", port: 1 }]);
+    expect(statSync(registry.path.replace(/\/services\.json$/, "")).mode & 0o777).toBe(0o700);
+    expect(statSync(registry.path).mode & 0o777).toBe(0o600);
   });
 
   test("projects persist, a member lives in one project, and unpin drops it", async () => {

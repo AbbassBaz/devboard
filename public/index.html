@@ -182,11 +182,12 @@
       <h3 id="envTitle">Env</h3>
       <button type="button" class="ghost" data-act="close-sheet">Close</button>
     </div>
-    <p class="lede">Overrides travel with the card. Live values are what the running process actually has.</p>
+    <p class="lede">Overrides travel with the card. Live values are what the running process actually has. macOS <code>ps eww</code> cuts values at the first space. Secret-looking keys are masked unless you reveal them.</p>
     <h3 class="sub">Overrides</h3>
     <pre id="envSaved">none</pre>
     <h3 class="sub">Live process</h3>
     <pre id="envLive">not running</pre>
+    <button type="button" class="ghost" id="envReveal" data-act="env-reveal" hidden>Reveal</button>
   </div>
 </div>
 

@@ -23,7 +23,7 @@ Dark, dense, keyboard-first. Three fixed rows: a 44px top bar, the workspace, an
 
 **Keys.** `↑↓` or `j`/`k` select. `space` toggles the selected server. `r` restarts. `e` jumps to the next error. `c` copies `cd <cwd> && <command>`. `o` opens the port in the browser. `/` focuses the filter. `Esc` closes a menu or sheet. Keys are ignored while an input has focus.
 
-**Sheets.** Worktrees, projects, presets, attention, env, and the full server edit open as overlays from the `···` menus. `Esc` or a click on the backdrop closes them. Destructive actions (stop all, stop project, kill system, remove, clear log) ask first.
+**Sheets.** Worktrees, projects, presets, attention, env, and the full server edit open as overlays from the `···` menus. `Esc` or a click on the backdrop closes them. Destructive actions (stop all, stop project, kill system, remove, clear log) ask first. The env sheet masks secret-looking live values and has a Reveal text button; a note says `ps eww` cuts values at the first space.
 
 The token, layout, and state rules below are the rest of the spec.
 

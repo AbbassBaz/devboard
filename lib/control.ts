@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, fstatSync, ftruncateSync, openSync, writeSync } from "node:fs";
-import { mkdir, stat, unlink } from "node:fs/promises";
+import { chmod, mkdir, stat, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { mergeEnv } from "./env";
 import { DEVBOARD_HOME, Registry } from "./registry";
@@ -170,9 +170,10 @@ export class Control {
     await this.hydrate();
     const cwdInfo = await stat(spec.cwd).catch(() => undefined);
     if (!cwdInfo?.isDirectory()) throw new Error(`working directory does not exist: ${spec.cwd}`);
-    await mkdir(this.logDir, { recursive: true });
+    await mkdir(this.logDir, { recursive: true, mode: 0o700 });
+    await chmod(this.logDir, 0o700);
     await this.rotateIfNeeded(spec.id);
-    const fd = openSync(this.logPath(spec.id), "a");
+    const fd = openSync(this.logPath(spec.id), "a", 0o600);
     try {
       const separator = fstatSync(fd).size > 0 ? "\n" : "";
       writeSync(fd, `${separator}===== ${new Date().toISOString()} start in ${spec.cwd}: ${spec.command} =====\n`);
@@ -211,6 +212,7 @@ export class Control {
     if (!this.hasLog(id)) throw new Error("no log for that id");
     const path = this.logPath(id);
     await Bun.write(path, `===== ${new Date().toISOString()} cleared =====\n`);
+    await chmod(path, 0o600);
     await unlink(`${path}.1`).catch(() => undefined);
     const { size } = await stat(path);
     return { path, size };

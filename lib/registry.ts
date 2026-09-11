@@ -1,4 +1,4 @@
-import { mkdir, rename } from "node:fs/promises";
+import { chmod, mkdir, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { assignMember, pruneProjectMembers, removeMember, renameMember } from "./projects";
@@ -16,6 +16,8 @@ export function pinnedId(name: string, port: number): string {
 }
 
 export class Registry {
+  private tmpSeq = 0;
+
   constructor(private readonly home: string = DEVBOARD_HOME) {}
 
   get path(): string {
@@ -28,11 +30,17 @@ export class Registry {
     return (await file.json()) as Pinned[];
   }
 
+  private async writeJson(path: string, data: unknown): Promise<void> {
+    await mkdir(this.home, { recursive: true, mode: 0o700 });
+    await chmod(this.home, 0o700);
+    const tmp = `${path}.${process.pid}.${++this.tmpSeq}.tmp`;
+    await Bun.write(tmp, JSON.stringify(data, null, 2) + "\n");
+    await rename(tmp, path);
+    await chmod(path, 0o600);
+  }
+
   async save(list: Pinned[]): Promise<void> {
-    await mkdir(this.home, { recursive: true });
-    const tmp = `${this.path}.tmp`;
-    await Bun.write(tmp, JSON.stringify(list, null, 2) + "\n");
-    await rename(tmp, this.path);
+    await this.writeJson(this.path, list);
   }
 
   async add(input: Omit<Pinned, "id">): Promise<Pinned> {
@@ -74,10 +82,7 @@ export class Registry {
     const set = await this.loadIgnored();
     if (ignored) set.add(id);
     else set.delete(id);
-    await mkdir(this.home, { recursive: true });
-    const tmp = `${this.ignoredPath}.tmp`;
-    await Bun.write(tmp, JSON.stringify([...set].sort(), null, 2) + "\n");
-    await rename(tmp, this.ignoredPath);
+    await this.writeJson(this.ignoredPath, [...set].sort());
   }
 
   async unpin(id: string): Promise<boolean> {
@@ -107,10 +112,7 @@ export class Registry {
   }
 
   async saveProjects(list: Project[]): Promise<void> {
-    await mkdir(this.home, { recursive: true });
-    const tmp = `${this.projectsPath}.tmp`;
-    await Bun.write(tmp, JSON.stringify(list, null, 2) + "\n");
-    await rename(tmp, this.projectsPath);
+    await this.writeJson(this.projectsPath, list);
   }
 
   async addProject(input: { name: string; folder?: string; memberIds?: string[]; links?: ProjectLink[] }): Promise<Project> {
@@ -195,10 +197,7 @@ export class Registry {
   }
 
   async savePresets(list: Preset[]): Promise<void> {
-    await mkdir(this.home, { recursive: true });
-    const tmp = `${this.presetsPath}.tmp`;
-    await Bun.write(tmp, JSON.stringify(list, null, 2) + "\n");
-    await rename(tmp, this.presetsPath);
+    await this.writeJson(this.presetsPath, list);
   }
 
   async addPreset(input: Omit<Preset, "id">): Promise<Preset> {
@@ -223,10 +222,7 @@ export class Registry {
   }
 
   async saveTracked(list: Tracked[]): Promise<void> {
-    await mkdir(this.home, { recursive: true });
-    const tmp = `${this.statePath}.tmp`;
-    await Bun.write(tmp, JSON.stringify(list, null, 2) + "\n");
-    await rename(tmp, this.statePath);
+    await this.writeJson(this.statePath, list);
   }
 
   async deletePreset(id: string): Promise<boolean> {

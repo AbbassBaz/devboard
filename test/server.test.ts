@@ -426,12 +426,49 @@ describe("healthUrl, ports, presets and attention", () => {
     expect(res.headers.get("content-type")).toContain("font/woff2");
   });
 
-  test("GET /api/env reads the current process environment", async () => {
-    const res = await call("GET", `/api/env?pid=${process.pid}`);
-    expect(res.status).toBe(200);
-    const { env } = await res.json();
-    expect(env.HOME || env.PATH).toBeString();
-    expect((await call("GET", "/api/env")).status).toBe(400);
+  test("GET /api/env masks secrets, gates pids, and reveal returns the value", async () => {
+    running = [{ ...docs, rootPid: 4242, pids: [4242, 4243] }];
+    const liveEnv = { API_KEY: "secret-value", PORT: "3000" };
+    const envHandle = createHandler({
+      discover: async () => running,
+      registry,
+      control,
+      allowedHosts: ["devboard.test"],
+      readProcessEnv: async () => liveEnv,
+    });
+    const envCall = (path: string) => envHandle(new Request(`http://devboard.test${path}`));
+    const masked = await (await envCall("/api/env?pid=4242")).json();
+    expect(masked.env).toEqual({ API_KEY: "••••", PORT: "3000" });
+    const revealed = await (await envCall("/api/env?pid=4243&reveal=1")).json();
+    expect(revealed.env.API_KEY).toBe("secret-value");
+    expect((await envCall("/api/env?pid=424242")).status).toBe(404);
+    expect((await envCall("/api/env")).status).toBe(400);
+
+    running = [];
+    await registry.add({
+      name: "envy", cwd: home, command: `printf 'API_KEY=%s\\n' "$API_KEY"; exit 0`, port: 39894,
+      env: { API_KEY: "secret-value" },
+    });
+    const started = await call("POST", "/api/start", { id: "envy-39894" });
+    expect(started.status).toBe(200);
+    spawned.push((await started.json()).pid);
+    await Bun.sleep(300);
+    const log = await (await call("GET", "/api/logs/envy-39894?lines=50")).json();
+    expect(log.lines).toContain("API_KEY=secret-value");
+    await registry.unpin("envy-39894");
+  });
+
+  test("GET /api/services masks env and GET /api/pinned/:id returns the real copy", async () => {
+    running = [];
+    await registry.add({
+      name: "secret", cwd: home, command: "true", port: 39893,
+      env: { API_KEY: "abc", PORT: "3000" },
+    });
+    const list = await (await call("GET", "/api/services")).json();
+    expect(list.services.find((s: Service) => s.id === "secret-39893").env).toEqual({ API_KEY: "••••", PORT: "3000" });
+    const raw = await (await call("GET", "/api/pinned/secret-39893")).json();
+    expect(raw.pinned.env).toEqual({ API_KEY: "abc", PORT: "3000" });
+    await registry.unpin("secret-39893");
   });
 
   test("GET /api/attention reports a port conflict", async () => {

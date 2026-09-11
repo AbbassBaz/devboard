@@ -588,7 +588,7 @@ function toggleAdd() {
   }
 }
 
-function openEdit(s) {
+async function openEdit(s) {
   editingId = s.id;
   const f = $("#editForm");
   f.reset();
@@ -604,6 +604,12 @@ function openEdit(s) {
   $("#formError").textContent = "";
   loadSuggest(s.cwd, "#f-suggest", "#f-cmd", "#f-port");
   openSheet("sheet-edit");
+  if (s.pinned && s.id) {
+    try {
+      const { pinned } = await api("GET", `/api/pinned/${encodeURIComponent(s.id)}`);
+      f.elements.envText.value = formatEnv(pinned.env);
+    } catch {}
+  }
 }
 
 function openProjectForm(p) {
@@ -662,15 +668,23 @@ function paintPresets() {
   </div>`).join("");
 }
 
+let envPid = null;
+async function loadLiveEnv(pid, reveal) {
+  const q = reveal ? "&reveal=1" : "";
+  const { env } = await api("GET", `/api/env?pid=${pid}${q}`);
+  $("#envLive").textContent = envBlock(env);
+}
+
 async function openEnv(s) {
+  envPid = s.rootPid || null;
   $("#envTitle").textContent = s.name;
   $("#envSaved").textContent = formatEnv(s.env) || "none";
-  $("#envLive").textContent = s.rootPid ? "reading…" : "not running";
+  $("#envLive").textContent = envPid ? "reading…" : "not running";
+  $("#envReveal").hidden = !envPid;
   openSheet("sheet-env");
-  if (!s.rootPid) return;
+  if (!envPid) return;
   try {
-    const { env } = await api("GET", `/api/env?pid=${s.rootPid}`);
-    $("#envLive").textContent = envBlock(env);
+    await loadLiveEnv(envPid, false);
   } catch (e) {
     $("#envLive").textContent = e.message;
   }
@@ -843,7 +857,11 @@ document.addEventListener("click", async (ev) => {
     }
     else if (act === "pin" && s) { closeMenu(); await api("POST", "/api/pin", { rootPid: s.rootPid }); }
     else if (act === "env" && s) { closeMenu(); await openEnv(s); }
-    else if (act === "edit" && s) { closeMenu(); openEdit(s); }
+    else if (act === "env-reveal") {
+      if (!envPid) return;
+      try { await loadLiveEnv(envPid, true); } catch (e) { $("#envLive").textContent = e.message; }
+    }
+    else if (act === "edit" && s) { closeMenu(); await openEdit(s); }
     else if (act === "remove" && s) {
       closeMenu();
       if (!confirm(`Remove saved server ${s.name}?`)) return;
