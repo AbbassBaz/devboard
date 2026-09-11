@@ -2,24 +2,49 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const home = (p) => (p ? p.replace(/^\/Users\/[^/]+/, "~") : "");
+const nowClock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+
+const RE_ERR = /error|exit|SIGTERM|EADDRINUSE|failed/i;
+const RE_WARN = /warn|⚠|retry/i;
+const RE_MARK = /^===|^\$ |^> /;
+const RE_OK = /listening|Ready|Compiled|connected|ready/;
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const LOG_TS = /^(\s*(?:\[[^\]]{6,32}\]|\d{4}-\d{2}-\d{2}[T ][\d:.Z+-]+|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*)/;
+
 let latest = [];
 let projects = [];
 let presets = [];
 let alerts = [];
 let worktrees = [];
 let wtStale = [];
-let tab = "board";
-const busy = new Map();
-const setBusy = (id, state) => busy.set(id, { state, at: Date.now() });
-let openLog = null;
+const busy = {};
+const logs = {};
+let sel = null;
+let query = "";
+let logFilter = "";
+let errOnly = false;
+let follow = true;
+let errCursor = null;
+let menu = null;
+let addOpen = false;
+let toastText = "";
 let editingId = null;
 let editingProjectId = null;
+let clock = nowClock();
+let toastTimer = 0;
+let lastLogSig = "";
+
+try { sel = localStorage.getItem("devboard.sel"); } catch {}
 
 function lastWtDir() {
   try { return localStorage.getItem("devboard.worktreesDir") || ""; } catch { return ""; }
 }
 function saveWtDir(dir) {
   try { localStorage.setItem("devboard.worktreesDir", dir); } catch {}
+}
+function saveSel(id) {
+  sel = id;
+  try { if (id) localStorage.setItem("devboard.sel", id); } catch {}
 }
 
 async function api(method, path, body) {
@@ -28,60 +53,138 @@ async function api(method, path, body) {
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
-function toast(msg) {
-  const t = $("#toast"); t.textContent = msg; t.style.display = "block";
-  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.style.display = "none"), 4500);
+
+function toast(msg, copied = false) {
+  toastText = msg ? { text: String(msg), copied } : "";
+  paintToast();
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastText = ""; paintToast(); }, 1600);
+}
+function copy(text) {
+  const t = String(text ?? "");
+  navigator.clipboard.writeText(t).then(() => toast(t, true)).catch(() => toast("could not copy"));
+}
+function paintToast() {
+  const el = $("#toast");
+  el.hidden = !toastText;
+  if (!toastText) { el.textContent = ""; return; }
+  el.innerHTML = toastText.copied
+    ? `copied · <span class="d">${esc(toastText.text)}</span>`
+    : esc(toastText.text);
+}
+
+function closeMenu() { if (menu) { menu = null; paintMenus(); } }
+function setMenu(name, ev) {
+  if (ev) ev.stopPropagation();
+  menu = menu === name ? null : name;
+  paintMenus();
+}
+function paintMenus() {
+  $("#topMenu").hidden = menu !== "top";
+  const logMenu = $("#logMenu");
+  if (logMenu) logMenu.hidden = menu !== "log";
+}
+
+function overlayOpen() { return !$("#overlay").hidden; }
+function closeSheet() {
+  $("#overlay").hidden = true;
+  $$("#overlay .sheet").forEach((el) => { el.hidden = true; });
+  editingId = null;
+  editingProjectId = null;
+}
+function openSheet(id) {
+  closeMenu();
+  closeSheet();
+  $("#overlay").hidden = false;
+  $(`#${id}`).hidden = false;
+}
+
+function stripAnsi(s) { return String(s ?? "").replace(ANSI_RE, ""); }
+function isErr(t) { return RE_ERR.test(stripAnsi(t)); }
+function isWarn(t) { return RE_WARN.test(stripAnsi(t)); }
+function lineKind(t) {
+  const text = stripAnsi(t);
+  if (isErr(text)) return "err";
+  if (isWarn(text)) return "warn";
+  if (RE_MARK.test(text)) return "mark";
+  if (RE_OK.test(text)) return "ok";
+  return "";
+}
+function splitLogLine(raw) {
+  const text = stripAnsi(raw);
+  const m = LOG_TS.exec(text);
+  return m ? { time: m[1].trim(), body: text.slice(m[0].length) } : { time: "", body: text };
+}
+function formatLogTime(t) {
+  if (!t) return "";
+  const iso = Date.parse(t);
+  if (!Number.isNaN(iso) && /^\d{4}-\d{2}-\d{2}/.test(t)) {
+    return new Date(iso).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  const m = t.match(/(\d{2}:\d{2}:\d{2})/);
+  return m ? m[1] : t;
+}
+function errCount(id) { return (logs[id] || []).filter(isErr).length; }
+function errTotal() {
+  return latest.filter((s) => s.kind === "dev" && !s.hidden).reduce((n, s) => n + errCount(s.id), 0);
+}
+
+function formatEnv(env) {
+  if (!env || !Object.keys(env).length) return "";
+  return Object.entries(env).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join("\n");
 }
 function envBlock(env) {
   const keys = Object.keys(env || {}).sort();
   if (!keys.length) return "none";
   return keys.map((k) => `${k}=${env[k]}`).join("\n");
 }
-function closeEnv() {
-  $("#envPane").classList.remove("open");
-  $("#envPane").setAttribute("aria-hidden", "true");
-}
-async function openEnv(s) {
-  $("#envTitle").textContent = s.name;
-  $("#envSaved").textContent = formatEnv(s.env) || "none";
-  $("#envLive").textContent = s.rootPid ? "reading…" : "not running";
-  $("#envPane").classList.add("open");
-  $("#envPane").setAttribute("aria-hidden", "false");
-  if (!s.rootPid) return;
-  try {
-    const { env } = await api("GET", `/api/env?pid=${s.rootPid}`);
-    $("#envLive").textContent = envBlock(env);
-  } catch (e) {
-    $("#envLive").textContent = e.message;
+
+function setBusy(id, state) { busy[id] = { state, at: Date.now() }; }
+function clearBusy(id) { delete busy[id]; }
+function sweepBusy() {
+  for (const [id, { state, at }] of Object.entries(busy)) {
+    const s = latest.find((x) => x.id === id);
+    const settled = (state === "starting" && s?.status === "running") || (state === "stopping" && (!s || s.status === "stopped"));
+    if (settled || Date.now() - at > 15000) delete busy[id];
   }
 }
+function rowState(s) {
+  const b = busy[s.id]?.state;
+  if (b) return "busy";
+  return s.status === "running" ? "on" : "off";
+}
+function portOf(s) { return s.ports?.[0]; }
+function runCmd(s) { return `cd ${s.cwd || "."} && ${s.command || ""}`; }
 
-function showTab(name) {
-  tab = name;
-  ["board", "worktrees", "attention"].forEach((id) => {
-    $(`#view-${id}`).hidden = id !== name;
-    const btn = document.querySelector(`nav.pills [data-tab="${id}"]`);
-    btn.classList.toggle("on", id === name);
+function visible() {
+  const q = query.trim().toLowerCase();
+  return latest.filter((s) => {
+    if (s.kind !== "dev" || s.hidden || !s.id) return false;
+    if (!q) return true;
+    return s.name.toLowerCase().includes(q) || s.ports.some((p) => String(p).includes(q));
   });
-  if (name === "worktrees") {
-    if (!$("#wt-dir").value) $("#wt-dir").value = lastWtDir() || "~/Documents/Personal/Projects";
-    if (!worktrees.length && !wtStale.length) scanWt();
-  }
-  if (name === "attention") loadAttention();
 }
-$$("nav.pills [data-tab]").forEach((btn) => btn.onclick = () => showTab(btn.dataset.tab));
 
-function closeForms() {
-  $("#addForm").hidden = true; editingId = null; $("#formError").textContent = "";
-  $("#projectForm").hidden = true; editingProjectId = null; $("#projectError").textContent = "";
-  $("#presetForm").hidden = true; $("#presetError").textContent = "";
+function ensureSel() {
+  const ids = visible().map((s) => s.id);
+  const all = latest.filter((s) => s.kind === "dev" && !s.hidden && s.id).map((s) => s.id);
+  if (sel && (ids.includes(sel) || all.includes(sel))) return;
+  saveSel(ids[0] || all[0] || null);
 }
-function formatEnv(env) {
-  if (!env || !Object.keys(env).length) return "";
-  return Object.entries(env).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join("\n");
+
+function selected() { return latest.find((s) => s.id === sel) || null; }
+
+function optimisticStartLines(s) {
+  const cmd = s.command || "";
+  return [`=== devboard start · ${cmd}`, `$ ${cmd}`];
 }
-async function loadSuggest(dir) {
-  const box = $("#f-suggest");
+
+function appendStartLines(s) {
+  logs[s.id] = [...(logs[s.id] || []), ...optimisticStartLines(s)];
+}
+
+async function loadSuggest(dir, boxId, cmdId, portId) {
+  const box = $(boxId);
   if (!dir?.trim()) { box.hidden = true; box.innerHTML = ""; return; }
   try {
     const { suggestions } = await api("GET", `/api/suggest?dir=${encodeURIComponent(dir.trim())}`);
@@ -90,36 +193,398 @@ async function loadSuggest(dir) {
     box.innerHTML = suggestions.map((s) =>
       `<button type="button" class="suggest" data-cmd="${esc(s.command)}" data-port="${s.port ?? ""}">${esc(s.label)} <span class="mono">${esc(s.command)}${s.port ? " · :" + s.port : ""}</span></button>`
     ).join("");
+    box.dataset.cmd = cmdId;
+    box.dataset.port = portId;
   } catch {
     box.hidden = true;
     box.innerHTML = "";
   }
 }
-function openForm(s) {
-  closeForms();
-  const f = $("#addForm");
-  editingId = s ? s.id : null;
+
+function paintClock() {
+  clock = nowClock();
+  $("#clock").textContent = clock;
+}
+function paintChrome() {
+  const dev = latest.filter((s) => s.kind === "dev" && !s.hidden);
+  const nUp = dev.filter((s) => s.status === "running").length;
+  const nBusy = dev.filter((s) => busy[s.id]).length;
+  const nDown = Math.max(0, dev.length - nUp - nBusy);
+  const nErr = errTotal();
+  $("#counts").innerHTML =
+    `<span><span class="n">${nUp}</span> up</span>` +
+    `<span class="${nDown ? "hot" : ""}">${nDown} down</span>` +
+    `<span class="${nErr ? "err" : ""}">${nErr} err</span>`;
+  $("#poll").textContent = `poll 3s · ${location.host || "127.0.0.1:4242"}`;
+}
+
+function paintList() {
+  const grouped = new Set(projects.flatMap((p) => p.memberIds));
+  const rows = visible();
+  const parts = [];
+  for (const p of projects) {
+    const members = rows.filter((s) => p.memberIds.includes(s.id));
+    if (!members.length && query.trim()) continue;
+    const on = members.filter((s) => s.status === "running").length;
+    parts.push(`<div class="g-head">
+      <span class="g-label">${esc(p.name)}</span>
+      <span class="mono">${on}/${members.length}</span>
+      <span class="g-acts">
+        <button type="button" class="start" data-act="project-start" data-id="${esc(p.id)}">start</button>
+        <button type="button" class="stop" data-act="project-stop" data-id="${esc(p.id)}" data-name="${esc(p.name)}">stop</button>
+        <button type="button" data-act="project-edit" data-id="${esc(p.id)}">edit</button>
+      </span>
+    </div>${members.map(rowHtml).join("") || `<p class="empty-note" style="padding:4px 12px">No servers in this project.</p>`}`);
+  }
+  const other = rows.filter((s) => !grouped.has(s.id));
+  if (other.length || (!projects.length && !rows.length)) {
+    if (projects.length) {
+      parts.push(`<div class="g-head"><span class="g-label">Other</span><span class="mono">${other.filter((s) => s.status === "running").length}/${other.length}</span></div>`);
+    }
+    parts.push(other.map(rowHtml).join("") || (projects.length ? "" : `<p class="empty-note" style="padding:12px">Nothing running. Start a server from a terminal, or add one and switch it on.</p>`));
+  }
+  $("#dev").innerHTML = parts.join("");
+
+  const sys = latest.filter((s) => s.kind === "system");
+  $("#sysCount").textContent = `${sys.length} listener${sys.length === 1 ? "" : "s"}`;
+  $("#sysList").innerHTML = sys.map((s) => `<div class="sysrow" data-id="${esc(s.id)}" data-name="${esc(s.name)}">
+    <span class="dot hollow"></span>
+    <span class="sys-main"><span class="n">${esc(s.name)} <span class="p">${s.ports.map((p) => ":" + p).join(" ")}</span></span><span class="c" title="${esc(s.command)}">${esc(s.command)}</span></span>
+    <button type="button" data-act="kill-sys" data-root="${s.rootPid}">kill</button>
+  </div>`).join("");
+
+  const hidden = latest.filter((s) => s.kind === "dev" && s.hidden);
+  $("#hiddenSec").hidden = hidden.length === 0;
+  $("#hiddenCount").textContent = String(hidden.length);
+  $("#hiddenList").innerHTML = hidden.map((s) => `<div class="hiddenrow" data-id="${esc(s.id)}">
+    <span class="n">${esc(s.name)}</span><span>${s.ports.map((p) => ":" + p).join("  ")}</span>
+    <button type="button" data-act="unhide">Show</button>
+  </div>`).join("");
+}
+
+function rowHtml(s) {
+  const state = rowState(s);
+  const b = busy[s.id]?.state;
+  const port = portOf(s);
+  const cpu = s.cpu ?? 0;
+  const errs = errCount(s.id);
+  const barW = state === "on" ? Math.round(Math.max(Math.min(cpu / 6, 1), cpu ? 0.04 : 0) * 100) : 0;
+  const meta = state === "on"
+    ? `pid ${s.rootPid} · ${cpu.toFixed(1)}% · ${s.memMb ?? 0} MB · up ${s.uptime || ""}`
+    : state === "busy"
+      ? `${b}… waiting for :${port ?? "—"}`
+      : s.pinned ? "stopped · saved" : "stopped";
+  const switchLabel = state === "busy" ? b : s.status === "running" ? `Stop ${s.name}` : `Start ${s.name}`;
+  return `<div class="row ${state}${sel === s.id ? " sel" : ""}" data-id="${esc(s.id)}" data-act="select">
+    <span class="dot ${state}"></span>
+    <span class="row-main">
+      <span class="row-name"><span class="n">${esc(s.name)}</span>${port ? `<a class="port" href="http://localhost:${port}" target="_blank" rel="noopener" data-act="open-port">:${port}</a>` : ""}</span>
+      <span class="row-meta">${esc(meta)}</span>
+    </span>
+    <span class="row-right">
+      ${errs ? `<span class="err-pill">${errs}</span>` : ""}
+      <span class="bar"><i class="${cpu > 4.5 ? "hot" : ""}" style="width:${barW}%"></i></span>
+    </span>
+    <button class="sw ${state}" role="switch" aria-checked="${s.status === "running"}" title="${esc(switchLabel)}" data-act="toggle" ${b ? "disabled" : ""}><span class="knob"></span></button>
+  </div>`;
+}
+
+function logMenuItems(s) {
+  if (!s) return [];
+  const inProject = projects.find((p) => p.memberIds.includes(s.id));
+  const items = [
+    { label: "Open in browser", key: "o", act: "open-browser" },
+    { label: "Open in editor", key: "", act: "open-editor" },
+    { label: "Copy run command", key: "c", act: "copy-run" },
+    { sep: true },
+    { label: errOnly ? "Show all lines" : "Show errors only", key: "", act: "toggle-err-only" },
+    { label: follow ? "Stop following" : "Follow new lines", key: "", act: "toggle-follow" },
+    { label: "Clear log", key: "", act: "clear-log" },
+    { sep: true },
+  ];
+  if (s.status === "running" && !s.pinned) items.push({ label: "Pin", key: "", act: "pin" });
+  if (s.pinned) items.push({ label: "Edit…", key: "", act: "edit" });
+  items.push({ label: "Env…", key: "", act: "env" });
+  if (inProject) items.push({ label: `Remove from ${inProject.name}`, key: "", act: "ungroup", project: inProject.id });
+  else {
+    for (const p of projects) items.push({ label: `Add to ${p.name}`, key: "", act: "group", project: p.id });
+  }
+  items.push({ label: "Hide", key: "", act: "hide" });
+  if (s.pinned) items.push({ label: "Remove", key: "", act: "remove", danger: true });
+  return items;
+}
+
+function paintLogHead() {
+  const s = selected();
+  const a = $("#logA");
+  const b = $("#logB");
+  if (!s) {
+    a.innerHTML = `<span class="name">Logs</span><span class="state">no server selected</span>`;
+    b.innerHTML = "";
+    return;
+  }
+  const state = rowState(s);
+  const bsy = busy[s.id]?.state;
+  const port = portOf(s);
+  const stateLabel = state === "on" ? "running" : state === "busy" ? bsy : "stopped";
+  const primaryLabel = state === "busy" ? `${bsy}…` : state === "on" ? "Restart" : "Start";
+  const primaryClass = state === "busy" ? "busy" : state === "on" ? "restart" : "";
+  const items = logMenuItems(s);
+  a.innerHTML = `
+    <span class="dot ${state}"></span>
+    <span class="name">${esc(s.name)}</span>
+    ${port ? `<a class="host" href="http://localhost:${port}" target="_blank" rel="noopener">localhost:${port} ↗</a>` : ""}
+    <span class="state">${esc(stateLabel)}</span>
+    <span class="log-acts">
+      <button type="button" class="primary-go ${primaryClass}" data-act="primary" ${state === "busy" ? "disabled" : ""}>${esc(primaryLabel)}</button>
+      <button type="button" class="icon-btn" id="logMenuBtn" title="More">···</button>
+      <div class="menu log" id="logMenu" ${menu === "log" ? "" : "hidden"}>
+        ${items.map((m) => m.sep
+          ? `<span class="menu-sep"></span>`
+          : `<button type="button" data-act="${esc(m.act)}" ${m.project ? `data-project="${esc(m.project)}"` : ""} class="${m.danger ? "danger" : ""}"><span>${esc(m.label)}</span><span class="k">${esc(m.key || "")}</span></button>`
+        ).join("")}
+      </div>
+    </span>`;
+  const cwd = home(s.cwd) || "—";
+  const cmd = s.command || "—";
+  const live = state === "on"
+    ? `<span class="live">pid ${s.rootPid} · ${(s.cpu ?? 0).toFixed(1)}% · ${s.memMb ?? 0} MB · up ${s.uptime || ""}</span>`
+    : "";
+  b.innerHTML = `
+    <button type="button" data-act="copy-cwd" title="Copy path"><span class="g">cwd</span><span class="v">${esc(cwd)}</span></button>
+    <button type="button" data-act="copy-cmd" title="Copy command"><span class="g">$</span><span class="v">${esc(cmd)}</span></button>
+    ${live}`;
+  $("#logMenuBtn")?.addEventListener("click", (ev) => setMenu("log", ev));
+}
+
+function shownLogs(s) {
+  const raw = (s && logs[s.id]) || [];
+  const q = logFilter.trim().toLowerCase();
+  return raw.map((rawLine, i) => ({ raw: rawLine, i, text: stripAnsi(rawLine) }))
+    .filter((l) => (!q || l.text.toLowerCase().includes(q)) && (!errOnly || isErr(l.text)));
+}
+
+function paintLogTools(s) {
+  const raw = (s && logs[s.id]) || [];
+  const errIdx = raw.map((l, i) => (isErr(l) ? i : -1)).filter((i) => i >= 0);
+  const shown = shownLogs(s);
+  const chip = $("#errChip");
+  chip.hidden = !s || errIdx.length === 0;
+  chip.classList.toggle("on", errOnly);
+  if (errIdx.length) {
+    const label = errOnly
+      ? `errors only · ${errIdx.length}`
+      : errCursor == null
+        ? `${errIdx.length} ${errIdx.length === 1 ? "error" : "errors"} ↓`
+        : `error ${errIdx.indexOf(errCursor) + 1}/${errIdx.length} ↓`;
+    chip.innerHTML = `<span class="d"></span>${esc(label)}`;
+  }
+  $("#followBtn").hidden = follow;
+  const filtered = !!(logFilter.trim() || errOnly);
+  $("#logCount").textContent = s ? (filtered ? `${shown.length}/${raw.length} lines` : `${raw.length} lines`) : "";
+  $("#logCount").title = s ? `~/.devboard/logs/${s.id}.log` : "";
+}
+
+function paintLogBody(s) {
+  const body = $("#logBody");
+  if (!s) {
+    body.innerHTML = `<div class="empty">Select a server to read its output.</div>`;
+    lastLogSig = "";
+    return;
+  }
+  const raw = logs[s.id] || [];
+  const shown = shownLogs(s);
+  const unmanaged = s.status === "running" && !s.hasLog && !raw.length;
+  const filteredEmpty = raw.length && !shown.length;
+  const sig = [s.id, raw.length, raw.at(-1), logFilter, errOnly, errCursor, s.status, rowState(s), follow].join("|");
+  if (sig === lastLogSig) {
+    if (follow) body.scrollTop = body.scrollHeight;
+    return;
+  }
+  lastLogSig = sig;
+
+  if (!shown.length) {
+    let text = "Nothing matches the current filter.";
+    let startBtn = "";
+    if (filteredEmpty) text = "Nothing matches the current filter.";
+    else if (unmanaged) {
+      text = "Started outside devboard — output is going to that terminal. Restart it here to capture logs.";
+    } else if (s.status !== "running") {
+      text = `${s.name} is stopped. Start it and its output lands here.`;
+      startBtn = `<button type="button" class="go" data-act="toggle">Start ${esc(s.name)}</button>`;
+    } else {
+      body.innerHTML = rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "";
+      if (follow) body.scrollTop = body.scrollHeight;
+      return;
+    }
+    body.innerHTML = `<div class="empty"><span>${esc(text)}</span>${startBtn}</div>`;
+    return;
+  }
+
+  const times = shown.map((l) => formatLogTime(splitLogLine(l.raw).time));
+  const showTime = times.some(Boolean);
+  body.innerHTML = shown.map((l) => {
+    const { time, body: rest } = splitLogLine(l.raw);
+    const kind = lineKind(l.text);
+    const t = formatLogTime(time);
+    const display = (rest || l.text) || l.text;
+    return `<div class="log-line ${kind}${errCursor === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
+      <span class="ln">${l.i + 1}</span>
+      ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
+      <span>${esc(display)}</span>
+    </div>`;
+  }).join("") + (rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "");
+
+  if (follow) body.scrollTop = body.scrollHeight;
+}
+
+function paintLog() {
+  const s = selected();
+  paintLogHead();
+  paintLogTools(s);
+  paintLogBody(s);
+}
+
+function render() {
+  sweepBusy();
+  ensureSel();
+  paintChrome();
+  paintList();
+  paintLog();
+  paintMenus();
+}
+
+function select(id) {
+  if (!id || sel === id) { saveSel(id); paintList(); return; }
+  saveSel(id);
+  errCursor = null;
+  lastLogSig = "";
+  paintList();
+  paintLog();
+  if (follow) $("#logBody").scrollTop = $("#logBody").scrollHeight;
+  fetchLog(id);
+}
+
+function nextErr() {
+  const s = selected();
+  if (!s) return;
+  const raw = logs[s.id] || [];
+  const idx = raw.map((l, i) => (isErr(l) ? i : -1)).filter((i) => i >= 0);
+  if (!idx.length) return;
+  const cur = errCursor == null ? -1 : errCursor;
+  const next = idx.find((i) => i > cur) ?? idx[0];
+  errCursor = next;
+  follow = false;
+  lastLogSig = "";
+  paintLog();
+  const c = $("#logBody");
+  const el = document.getElementById(`log-${s.id}-${next}`);
+  if (c && el) c.scrollTop = el.offsetTop - c.offsetTop - Math.min(80, c.clientHeight / 3);
+}
+
+function moveSel(dir) {
+  const ids = visible().map((s) => s.id);
+  if (!ids.length) return;
+  const i = Math.max(0, ids.indexOf(sel));
+  const next = ids[Math.max(0, Math.min(ids.length - 1, i + dir))];
+  select(next);
+  const el = document.querySelector(`.row.sel`);
+  el?.scrollIntoView({ block: "nearest" });
+}
+
+async function toggle(s) {
+  if (!s || busy[s.id]) return;
+  try {
+    if (s.status === "running") {
+      setBusy(s.id, "stopping");
+      render();
+      if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid });
+      await api("POST", "/api/kill", { rootPid: s.rootPid });
+    } else {
+      setBusy(s.id, "starting");
+      appendStartLines(s);
+      lastLogSig = "";
+      render();
+      await api("POST", "/api/start", { id: s.id });
+    }
+  } catch (e) {
+    clearBusy(s.id);
+    toast(e.message);
+  }
+  refresh();
+  refreshSoon();
+}
+
+async function restart(s) {
+  if (!s || busy[s.id]) return;
+  setBusy(s.id, "starting");
+  appendStartLines(s);
+  lastLogSig = "";
+  render();
+  try {
+    await api("POST", "/api/restart", s.rootPid ? { rootPid: s.rootPid } : { id: s.id });
+  } catch (e) {
+    clearBusy(s.id);
+    toast(e.message);
+  }
+  refresh();
+  refreshSoon();
+}
+
+async function switchAll(on) {
+  closeMenu();
+  const targets = latest.filter((s) => s.kind === "dev" && !s.hidden && (on ? s.status === "stopped" : s.status === "running"));
+  if (!targets.length) return;
+  if (!on && !confirm(`Switch off ${targets.length} running dev server${targets.length > 1 ? "s" : ""}? Unsaved ones get pinned first so you can switch them back on.`)) return;
+  for (const s of targets) {
+    setBusy(s.id, on ? "starting" : "stopping");
+    if (on) appendStartLines(s);
+  }
+  lastLogSig = "";
+  render();
+  for (const s of targets) {
+    try {
+      if (on) await api("POST", "/api/start", { id: s.id });
+      else {
+        if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid });
+        await api("POST", "/api/kill", { rootPid: s.rootPid });
+      }
+    } catch (e) { clearBusy(s.id); toast(`${s.name}: ${e.message}`); }
+  }
+  refresh();
+  refreshSoon();
+}
+
+function toggleAdd() {
+  addOpen = !addOpen;
+  $("#addForm").hidden = !addOpen;
+  if (addOpen) {
+    $("#addForm").reset();
+    $("#a-suggest").hidden = true;
+    $("#addError").textContent = "";
+    $("#a-name").focus();
+  }
+}
+
+function openEdit(s) {
+  editingId = s.id;
+  const f = $("#editForm");
   f.reset();
   $("#f-suggest").hidden = true;
-  $("#f-suggest").innerHTML = "";
-  if (s) {
-    f.elements.name.value = s.name;
-    f.elements.cwd.value = s.cwd ?? "";
-    f.elements.command.value = s.command ?? "";
-    f.elements.port.value = s.ports[0];
-    f.elements.healthUrl.value = s.healthUrl ?? "";
-    f.elements.envText.value = formatEnv(s.env);
-    f.elements.restartOnCrash.checked = !!s.restartOnCrash;
-    loadSuggest(s.cwd);
-  }
-  $("#formTitle").textContent = s ? `Edit ${s.name}` : "Add a server";
-  $("#formSubmit").textContent = s ? "Save changes" : "Add server";
-  f.hidden = false;
-  f.scrollIntoView({ block: "nearest" });
-  $("#f-name").focus();
+  f.elements.name.value = s.name;
+  f.elements.cwd.value = s.cwd ?? "";
+  f.elements.command.value = s.command ?? "";
+  f.elements.port.value = s.ports[0] ?? "";
+  f.elements.healthUrl.value = s.healthUrl ?? "";
+  f.elements.envText.value = formatEnv(s.env);
+  f.elements.restartOnCrash.checked = !!s.restartOnCrash;
+  $("#formTitle").textContent = `Edit ${s.name}`;
+  $("#formError").textContent = "";
+  loadSuggest(s.cwd, "#f-suggest", "#f-cmd", "#f-port");
+  openSheet("sheet-edit");
 }
+
 function openProjectForm(p) {
-  closeForms();
   editingProjectId = p ? p.id : null;
   const f = $("#projectForm");
   f.reset();
@@ -131,480 +596,63 @@ function openProjectForm(p) {
   }
   $("#projectTitle").textContent = p ? `Edit ${p.name}` : "New project";
   $("#projectSubmit").textContent = p ? "Save project" : "Create project";
-  f.hidden = false;
-  $("#p-name").focus();
+  $("#projectError").textContent = "";
+  paintProjectList();
+  openSheet("sheet-project");
 }
+
+function paintProjectList() {
+  const el = $("#projectList");
+  if (!projects.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<h3 class="sub">Projects</h3>` + projects.map((p) => `<div class="proj-row" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-folder="${esc(p.folder ?? "")}">
+    <strong>${esc(p.name)}</strong>
+    <span class="mono">${p.on} on · ${p.off} off</span>
+    ${p.folder ? `<button type="button" data-act="project-folder">Add from folder</button>` : ""}
+    <button type="button" data-act="project-edit">Edit</button>
+    <button type="button" class="danger" data-act="project-delete">Remove</button>
+  </div>`).join("");
+}
+
 function openPresetForm() {
-  closeForms();
   const f = $("#presetForm");
   f.reset();
   const dev = latest.filter((s) => s.kind === "dev" && !s.hidden && s.id);
   $("#pr-services").innerHTML = dev.length
     ? dev.map((s) => `<label class="check"><input type="checkbox" name="serviceId" value="${esc(s.id)}" ${s.status === "running" ? "checked" : ""}> ${esc(s.name)} <span class="mono">:${s.ports[0] ?? "—"}</span></label>`).join("")
-    : `<p class="empty" style="padding:0">Pin a server first, then save it here.</p>`;
+    : `<p class="empty-note">Pin a server first, then save it here.</p>`;
   f.elements.urls.value = dev.filter((s) => s.status === "running" && s.ports[0]).map((s) => `http://127.0.0.1:${s.ports[0]}`).join("\n");
-  f.hidden = false;
-  $("#pr-name").focus();
-}
-
-function readinessOf(s) {
-  const b = busy.get(s.id)?.state;
-  if (b === "starting") return "starting";
-  if (b === "stopping") return "stopped";
-  return s.readiness || (s.status === "running" ? "ready" : "stopped");
-}
-function cheapAlerts(list) {
-  const byPort = new Map();
-  let unhealthy = 0;
-  for (const s of list) {
-    if (s.kind !== "dev" || s.hidden) continue;
-    if (s.readiness === "unhealthy") unhealthy++;
-    for (const port of s.ports) {
-      const rows = byPort.get(port) ?? [];
-      rows.push(s);
-      byPort.set(port, rows);
-    }
-  }
-  let conflicts = 0;
-  for (const rows of byPort.values()) {
-    if (new Set(rows.map((s) => s.cwd).filter(Boolean)).size > 1) conflicts++;
-  }
-  return { unhealthy, conflicts, total: unhealthy + conflicts + alerts.length };
-}
-
-function card(s) {
-  const running = s.status === "running";
-  const b = busy.get(s.id)?.state;
-  const ready = readinessOf(s);
-  const state = b ? "busy" : running ? "on" : "off";
-  const ports = s.ports.map((p) => `<a class="port-link mono" href="http://127.0.0.1:${p}" target="_blank" rel="noopener" title="Open http://127.0.0.1:${p}">:${p}</a>`).join("");
-  const health = s.health ? `   ${s.health.ok ? s.health.status : (s.health.error || s.health.status)} · ${s.health.ms}ms` : "";
-  const facts = running
-    ? `<span>pid ${s.rootPid}</span><span>up ${esc(s.uptime)}</span><span>${s.cpu != null ? s.cpu.toFixed(1) : "0.0"}% cpu</span><span>${s.memMb ?? 0} MB</span>`
-    : `<span>off</span><span>${s.pinned ? "saved" : ""}</span>`;
-  const actions = [
-    `<button data-act="logs">Logs</button>`,
-    `<button data-act="env">Env</button>`,
-    running ? `<button data-act="restart" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Restart</button>` : "",
-    running && !s.pinned ? `<button data-act="pin" ${s.cwd ? "" : 'disabled title="working directory unknown"'}>Pin</button>` : "",
-    s.pinned ? `<button data-act="edit">Edit</button>` : "",
-    s.pinned ? `<button data-act="remove" class="danger">Remove</button>` : "",
-    s.projectId ? `<button data-act="ungroup">Ungroup</button>` : "",
-    !s.projectId && projects.length === 1 ? `<button data-act="group" data-project="${esc(projects[0].id)}">Add to ${esc(projects[0].name)}</button>` : "",
-    !s.projectId && projects.length > 1 ? `<select data-act="group-select" aria-label="Add to project"><option value="">Add to project…</option>${projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select>` : "",
-    `<button data-act="hide" title="Move this card to the hidden list">Hide</button>`,
-  ].join("");
-  const switchLabel = b === "starting" ? "Starting" : b === "stopping" ? "Stopping" : running ? `Turn ${s.name} off` : `Turn ${s.name} on`;
-  return `<article class="card ${state} ${ready}" data-id="${esc(s.id)}" data-name="${esc(s.name)}">
-    <div class="rail"></div>
-    <div class="head">
-      <div>
-        <div class="ready-tag">${esc(ready)}${s.pinned ? " · pinned" : ""}${s.restartOnCrash ? " · keep up" : ""}</div>
-        <div class="name">${esc(s.name)}</div>
-        <div class="ports">${ports}</div>
-      </div>
-      <button class="switch" role="switch" aria-checked="${running}" aria-label="${esc(switchLabel)}" title="${esc(switchLabel)}" data-act="toggle" ${b ? "disabled" : ""}><span class="knob"></span></button>
-    </div>
-    <div class="facts mono">${facts}${health}</div>
-    <div class="path mono" title="${esc(s.cwd)}">${esc(home(s.cwd))}</div>
-    <div class="cmd mono" title="${esc(s.command)}">${esc(s.command ?? "")}</div>
-    <div class="actions">${actions}</div>
-  </article>`;
-}
-function sysRow(s) {
-  return `<div class="sysrow mono" data-id="${esc(s.id)}" data-name="${esc(s.name)}"><span class="n">${esc(s.name)}</span><span class="p">${s.ports.map((p) => ":" + p).join("  ")}</span><span>${s.rootPid}</span><span class="c" title="${esc(s.command)}">${esc(s.command)}</span><button data-act="kill-sys" data-root="${s.rootPid}">Kill</button></div>`;
-}
-function hiddenRow(s) {
-  return `<div class="hiddenrow mono" data-id="${esc(s.id)}"><span class="n">${esc(s.name)}</span><span>${s.ports.map((p) => ":" + p).join("  ")}</span><span>${s.status}</span><button data-act="unhide">Show</button></div>`;
-}
-function projectBand(p) {
-  const members = latest.filter((s) => p.memberIds.includes(s.id)).sort((a, b) => (a.status === b.status ? a.name.localeCompare(b.name) : a.status === "running" ? -1 : 1));
-  const ports = p.ports.map((port) => `<a class="port-link mono" href="http://127.0.0.1:${port}" target="_blank" rel="noopener" title="Open http://127.0.0.1:${port}">:${port}</a>`).join("");
-  const extra = (p.links || []).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join("");
-  const facts = `${p.on} on   ${p.off} off${p.on ? `   ${p.cpu.toFixed(1)}% cpu   ${p.memMb} MB` : ""}`;
-  return `<section class="project" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-folder="${esc(p.folder ?? "")}">
-    <header class="project-bar">
-      <div>
-        <p class="eyebrow">Project</p>
-        <h3>${esc(p.name)}</h3>
-        <div class="facts mono">${facts}${p.folder ? `   <span title="${esc(p.folder)}">${esc(home(p.folder))}</span>` : ""}</div>
-        <div class="links">${ports}${extra}</div>
-      </div>
-      <div class="project-acts">
-        <button class="ghost" data-act="project-start" ${p.off ? "" : "disabled"}>Start project</button>
-        <button class="ghost danger" data-act="project-stop" ${p.on ? "" : "disabled"}>Stop project</button>
-        ${p.folder ? `<button class="ghost" data-act="project-folder">Add from folder</button>` : ""}
-        <button class="ghost" data-act="project-edit">Edit</button>
-        <button class="ghost danger" data-act="project-delete">Remove</button>
-      </div>
-    </header>
-    <div class="grid">${members.length ? members.map((s) => card({ ...s, projectId: p.id })).join("") : `<p class="empty">No servers in this project yet.</p>`}</div>
-  </section>`;
+  $("#presetError").textContent = "";
+  paintPresets();
+  openSheet("sheet-preset");
 }
 
 function paintPresets() {
   const el = $("#presets");
   if (!presets.length) {
-    el.innerHTML = `<p class="empty" style="padding:4px 0 8px">No resume presets yet. Save “Frontend only” or “Full stack” when the right servers are on.</p>`;
+    el.innerHTML = `<p class="empty-note">No resume presets yet.</p>`;
     return;
   }
   el.innerHTML = presets.map((p) => `<div class="preset" data-id="${esc(p.id)}">
     <strong>${esc(p.name)}</strong>
-    <span class="mono" style="color:var(--dim)">${p.serviceIds.length} servers</span>
-    <button data-act="preset-run">Resume</button>
-    <button data-act="preset-del" class="danger">Remove</button>
+    <span class="mono">${p.serviceIds.length} servers</span>
+    <button type="button" data-act="preset-run">Resume</button>
+    <button type="button" data-act="preset-del" class="danger">Remove</button>
   </div>`).join("");
 }
 
-function paintChips() {
-  const dev = latest.filter((s) => s.kind === "dev" && !s.hidden);
-  const on = dev.filter((s) => s.status === "running").length;
-  const off = dev.filter((s) => s.status === "stopped").length;
-  const sick = dev.filter((s) => s.readiness === "unhealthy").length;
-  $("#chips").innerHTML = `
-    <div class="chip on"><div class="k">Active</div><div class="v">${on}</div><div class="s">listening now</div></div>
-    <div class="chip off"><div class="k">Idle</div><div class="v">${off}</div><div class="s">saved, waiting</div></div>
-    <div class="chip proj"><div class="k">Projects</div><div class="v">${projects.length}</div><div class="s">${presets.length} resume preset${presets.length === 1 ? "" : "s"}</div></div>
-    <div class="chip alert"><div class="k">Unhealthy</div><div class="v">${sick}</div><div class="s">${alerts.length ? alerts.length + " signals" : "health probes"}</div></div>`;
-}
-
-function paintStatus() {
-  const dev = latest.filter((s) => s.kind === "dev" && !s.hidden);
-  const on = dev.filter((s) => s.status === "running").length;
-  const off = dev.filter((s) => s.status === "stopped").length;
-  const cheap = cheapAlerts(latest);
-  const clock = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  const label = cheap.unhealthy || cheap.conflicts || alerts.length
-    ? `${cheap.unhealthy + cheap.conflicts + alerts.length} need attention · ${clock}`
-    : `all systems operational · ${clock}`;
-  $("#stamp").textContent = `${on} on   ${off} off   ${label}`;
-  $("#status").className = "status" + (cheap.unhealthy || alerts.some((a) => a.kind === "exited") ? " bad" : cheap.conflicts || alerts.length ? " warn" : "");
-  const n = Math.max(alerts.length, cheap.unhealthy + cheap.conflicts);
-  $("#attnBadge").hidden = n === 0;
-  $("#attnBadge").textContent = String(n);
-}
-
-function render() {
-  const grouped = new Set(projects.flatMap((p) => p.memberIds));
-  const dev = latest.filter((s) => s.kind === "dev" && !s.hidden);
-  const hidden = latest.filter((s) => s.kind === "dev" && s.hidden);
-  const sys = latest.filter((s) => s.kind === "system");
-  const ungrouped = dev.filter((s) => !grouped.has(s.id));
-  $("#hiddenSec").hidden = hidden.length === 0;
-  $("#hiddenList").innerHTML = hidden.map(hiddenRow).join("");
-  $("#hiddenCount").textContent = `(${hidden.length})`;
-  $("#startAll").disabled = !dev.some((s) => s.status === "stopped");
-  $("#stopAll").disabled = !dev.some((s) => s.status === "running");
-  for (const [id, { state, at }] of busy) {
-    const s = latest.find((x) => x.id === id);
-    const settled = (state === "starting" && s?.status === "running") || (state === "stopping" && (!s || s.status === "stopped"));
-    if (settled || Date.now() - at > 15000) busy.delete(id);
-  }
-  ungrouped.sort((a, b) => (a.status === b.status ? a.name.localeCompare(b.name) : a.status === "running" ? -1 : 1));
-  $("#projects").innerHTML = projects.map(projectBand).join("");
-  $("#otherLabel").hidden = !(projects.length && ungrouped.length);
-  $("#dev").innerHTML = ungrouped.length ? ungrouped.map(card).join("") : (projects.length ? "" : `<p class="empty">Nothing running. Start a server from a terminal, or add one and switch it on.</p>`);
-  $("#sysList").innerHTML = sys.map(sysRow).join("");
-  $("#sysCount").textContent = `(${sys.length})`;
-  paintChips();
-  paintPresets();
-  paintStatus();
-  renderLog();
-}
-
-async function refresh() {
+async function openEnv(s) {
+  $("#envTitle").textContent = s.name;
+  $("#envSaved").textContent = formatEnv(s.env) || "none";
+  $("#envLive").textContent = s.rootPid ? "reading…" : "not running";
+  openSheet("sheet-env");
+  if (!s.rootPid) return;
   try {
-    const data = await api("GET", "/api/services");
-    latest = data.services;
-    projects = data.projects ?? [];
-    presets = data.presets ?? [];
-    render();
-  } catch {
-    $("#stamp").textContent = "devboard server unreachable";
-    $("#status").className = "status bad";
+    const { env } = await api("GET", `/api/env?pid=${s.rootPid}`);
+    $("#envLive").textContent = envBlock(env);
+  } catch (e) {
+    $("#envLive").textContent = e.message;
   }
 }
-const refreshSoon = () => [700, 1600, 3000].forEach((ms) => setTimeout(refresh, ms));
-
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const LOG_TS = /^(\s*(?:\[[^\]]{6,32}\]|\d{4}-\d{2}-\d{2}[T ][\d:.Z+-]+|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*)/;
-const LV_ERR = /\b(error|err!|fatal|panic|exception|uncaught|unhandled|econnrefused|enotfound|eaddrinuse|eacces|failed|failure|rejected|cannot |can't |exit(?:ed)? status|[✖×✗]|err_[a-z0-9_]+)\b|^\s*at\s+\S+/i;
-const LV_WARN = /\b(warn(?:ing)?|deprecated|caution|slow|overrid)\b|[⚠]/i;
-const LV_INFO = /\b(info|listening|ready|started|compiled|success|connected|http\/|GET |POST |PUT |PATCH |DELETE )\b/i;
-const LV_DEBUG = /\b(debug|trace|verbose)\b/i;
-function stripAnsi(s) { return s.replace(ANSI_RE, ""); }
-function classifyLine(raw) {
-  const text = stripAnsi(raw);
-  const tagged = /^\s*(?:\[)?(error|err|fatal|warn(?:ing)?|info|debug|trace)(?:\])?\s*[:\-]/.exec(text.toLowerCase());
-  if (tagged) {
-    const t = tagged[1];
-    if (t === "error" || t === "err" || t === "fatal") return "error";
-    if (t.startsWith("warn")) return "warn";
-    if (t === "info") return "info";
-    return "debug";
-  }
-  if (LV_ERR.test(text)) return "error";
-  if (LV_WARN.test(text)) return "warn";
-  if (LV_INFO.test(text)) return "info";
-  if (LV_DEBUG.test(text)) return "debug";
-  return "other";
-}
-function splitLogLine(raw) {
-  const text = stripAnsi(raw);
-  const m = LOG_TS.exec(text);
-  return m ? { time: m[1].trim(), body: text.slice(m[0].length) } : { time: "", body: text };
-}
-function wrapAnsi(text, cls) {
-  if (!text) return "";
-  if (!cls.length) return text;
-  return `<span class="${cls.join(" ")}">${text}</span>`;
-}
-function colorizeText(raw) {
-  if (!raw.includes("\x1b[")) return esc(raw);
-  let html = "", cls = [], last = 0, m;
-  const re = /\x1b\[([0-9;]*)m/g;
-  while ((m = re.exec(raw))) {
-    html += wrapAnsi(esc(raw.slice(last, m.index)), cls);
-    last = re.lastIndex;
-    const next = [];
-    let bold = cls.includes("ansi-b"), dim = cls.includes("ansi-d"), color = cls.find((c) => c.startsWith("c"));
-    for (const c of (m[1] ? m[1].split(";").map(Number) : [0])) {
-      if (c === 0) { bold = false; dim = false; color = undefined; }
-      else if (c === 1) bold = true;
-      else if (c === 2) dim = true;
-      else if (c === 22) { bold = false; dim = false; }
-      else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) color = "c" + c;
-    }
-    if (bold) next.push("ansi-b");
-    if (dim) next.push("ansi-d");
-    if (color) next.push(color);
-    cls = next;
-  }
-  return html + wrapAnsi(esc(raw.slice(last)), cls);
-}
-function markText(html, q) {
-  if (!q) return html;
-  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig");
-  return html.replace(re, (m) => `<mark>${m}</mark>`);
-}
-function prettyJson(raw) {
-  const t = stripAnsi(raw).trim();
-  if (!((t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]")))) return "";
-  try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return ""; }
-}
-const LV_LABEL = { error: "ERR", warn: "WRN", info: "INF", debug: "DBG", other: "" };
-
-let logLines = [];
-let logShown = [];
-let logMark = 0;
-try { if (localStorage.getItem("devboard.logWrap") === "0") $("#logWrap").setAttribute("aria-pressed", "false"); } catch {}
-function logWrapped() { return $("#logWrap").getAttribute("aria-pressed") !== "false"; }
-function setWrap(on) {
-  $("#logWrap").setAttribute("aria-pressed", on ? "true" : "false");
-  $("#logWrap").textContent = on ? "Wrap" : "Unwrap";
-  $("#logWrap").classList.toggle("on", on);
-  $("#logBody").classList.toggle("wrap", on);
-  $("#logBody").classList.toggle("nowrap", !on);
-  try { localStorage.setItem("devboard.logWrap", on ? "1" : "0"); } catch {}
-}
-setWrap(logWrapped());
-
-function shownLogs() {
-  const q = $("#logFilter").value.trim().toLowerCase();
-  const active = [...document.querySelectorAll(".lvchip.on")].map((b) => b.dataset.lv);
-  return logLines.map((raw, i) => ({ raw, i, lv: classifyLine(raw) })).filter((row) => {
-    if (active.length && !active.includes(row.lv) && !(active.includes("info") && row.lv === "other")) return false;
-    if (q && !stripAnsi(row.raw).toLowerCase().includes(q)) return false;
-    return true;
-  });
-}
-function paintLog() {
-  const body = $("#logBody");
-  const keepOpen = new Set([...body.querySelectorAll(".log-row.open")].map((r) => r.dataset.i));
-  const keepJson = new Set([...body.querySelectorAll(".log-row .json")].map((r) => r.closest(".log-row")?.dataset.i));
-  const keepTop = body.scrollTop;
-  const q = $("#logFilter").value.trim();
-  logShown = shownLogs();
-  const counts = { error: 0, warn: 0, info: 0 };
-  for (const raw of logLines) {
-    const lv = classifyLine(raw);
-    if (lv === "error") counts.error++;
-    else if (lv === "warn") counts.warn++;
-    else if (lv === "info" || lv === "other") counts.info++;
-  }
-  $("#logNerr").textContent = counts.error;
-  $("#logNwarn").textContent = counts.warn;
-  $("#logNinfo").textContent = counts.info;
-  if (!logShown.length) {
-    body.innerHTML = `<div class="note">${logLines.length ? "Nothing matches these filters." : "No lines yet."}</div>`;
-  } else {
-    body.innerHTML = logShown.map((row) => {
-      const { time, body: rest } = splitLogLine(row.raw);
-      const json = prettyJson(rest || row.raw);
-      const msg = markText(colorizeText(row.raw.includes("\x1b[") ? row.raw : (rest || row.raw)), q);
-      return `<div class="log-row lv-${row.lv}" data-i="${row.i}" data-lv="${row.lv}">
-        <span class="lvl">${LV_LABEL[row.lv] || "·"}</span>
-        <span class="ts" title="${esc(time)}">${esc(time)}</span>
-        <span class="msg">${msg}${json ? `<button class="tog" data-act="log-json" style="margin-top:6px">JSON</button>` : ""}</span>
-      </div>`;
-    }).join("");
-  }
-  const marks = [...body.querySelectorAll("mark")];
-  if (marks.length) {
-    logMark = Math.min(logMark, marks.length - 1);
-    marks[logMark]?.classList.add("cur");
-  }
-  $("#logFindCount").textContent = q ? `${marks.length ? logMark + 1 : 0}/${marks.length}` : "0";
-  $("#logCount").textContent = `${logShown.length} of ${logLines.length} · ${counts.error} err · ${counts.warn} wrn · ${counts.info} inf`;
-  for (const row of body.querySelectorAll(".log-row")) {
-    if (keepOpen.has(row.dataset.i)) row.classList.add("open");
-    if (keepJson.has(row.dataset.i)) {
-      const rec = logShown.find((r) => String(r.i) === row.dataset.i);
-      const pretty = rec ? prettyJson(splitLogLine(rec.raw).body || rec.raw) : "";
-      if (pretty && !row.querySelector(".json")) {
-        const pre = document.createElement("pre");
-        pre.className = "json";
-        pre.textContent = pretty;
-        row.querySelector("[data-act=log-json]")?.after(pre);
-      }
-    }
-  }
-  if ($("#logFollow").checked) body.scrollTop = body.scrollHeight;
-  else body.scrollTop = keepTop;
-}
-function jumpMark(dir) {
-  const marks = [...$("#logBody").querySelectorAll("mark")];
-  if (!marks.length) return;
-  marks[logMark]?.classList.remove("cur");
-  logMark = (logMark + dir + marks.length) % marks.length;
-  marks[logMark].classList.add("cur");
-  marks[logMark].closest(".log-row")?.scrollIntoView({ block: "center" });
-  $("#logFindCount").textContent = `${logMark + 1}/${marks.length}`;
-}
-async function renderLog() {
-  if (!openLog) return;
-  const s = latest.find((x) => x.id === openLog);
-  const body = $("#logBody");
-  $("#logTitle").textContent = s ? s.name : openLog;
-  if (!s) { body.innerHTML = `<div class="note">This service is no longer on the board.</div>`; $("#logMeta").textContent = ""; $("#logCount").textContent = ""; return; }
-  if (!s.hasLog) {
-    $("#logMeta").textContent = "no output captured";
-    $("#logCount").textContent = "";
-    body.innerHTML = s.status === "running"
-      ? `<div class="note"><strong>${esc(s.name)}</strong> was started from a terminal, so its output is going there. Restart it here to capture the log.<br><button class="ghost" data-act="restart" data-id="${esc(s.id)}">Restart ${esc(s.name)} here</button></div>`
-      : `<div class="note"><strong>${esc(s.name)}</strong> has never been started from devboard. Switch it on and its output lands here.</div>`;
-    return;
-  }
-  try {
-    const { lines, size } = await api("GET", `/api/logs/${encodeURIComponent(s.id)}?lines=4000`);
-    logLines = lines;
-    $("#logMeta").textContent = `${size < 1024 ? size + " B" : (size / 1024).toFixed(0) + " KB"}   ~/.devboard/logs/${s.id}.log`;
-    paintLog();
-  } catch (e) { toast(e.message); }
-}
-function openPane(id) {
-  openLog = id; logLines = []; logShown = []; logMark = 0;
-  $("#logFilter").value = ""; $("#logFollow").checked = true;
-  $$(".lvchip").forEach((b) => { b.classList.remove("on"); b.setAttribute("aria-pressed", "false"); });
-  $("#logBody").innerHTML = "";
-  $("#logs").classList.add("open"); document.body.classList.add("logs-open");
-  setWrap(logWrapped());
-  renderLog();
-}
-function closePane() { openLog = null; $("#logs").classList.remove("open"); document.body.classList.remove("logs-open"); }
-function copyShown() {
-  const text = logShown.map((r) => stripAnsi(r.raw)).join("\n");
-  navigator.clipboard.writeText(text).then(() => toast(`Copied ${logShown.length} lines`)).catch(() => toast("Could not copy"));
-}
-function downloadShown() {
-  const text = logShown.map((r) => stripAnsi(r.raw)).join("\n");
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-  a.download = `${openLog || "devboard"}.log`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-$("#logFilter").oninput = () => { logMark = 0; paintLog(); };
-$("#logFollow").onchange = () => { if ($("#logFollow").checked) $("#logBody").scrollTop = $("#logBody").scrollHeight; };
-$("#logWrap").onclick = () => setWrap(!logWrapped());
-$("#logFindNext").onclick = () => jumpMark(1);
-$("#logFindPrev").onclick = () => jumpMark(-1);
-$$(".lvchip").forEach((b) => b.onclick = () => {
-  b.classList.toggle("on");
-  b.setAttribute("aria-pressed", b.classList.contains("on") ? "true" : "false");
-  paintLog();
-});
-$("#logCopy").onclick = copyShown;
-$("#logDownload").onclick = downloadShown;
-$("#logClear").onclick = async () => {
-  if (!openLog) return;
-  const s = latest.find((x) => x.id === openLog);
-  if (!s?.hasLog) return;
-  if (!confirm(`Clear the log file for ${s.name}? This truncates ~/.devboard/logs/${s.id}.log.`)) return;
-  try {
-    await api("DELETE", `/api/logs/${encodeURIComponent(s.id)}`);
-    logLines = [];
-    paintLog();
-    refresh();
-  } catch (e) { toast(e.message); }
-};
-$("#logBody").addEventListener("scroll", () => {
-  const b = $("#logBody");
-  const atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 8;
-  if (!atBottom && $("#logFollow").checked) $("#logFollow").checked = false;
-  else if (atBottom && !$("#logFollow").checked) $("#logFollow").checked = true;
-});
-$("#logBody").addEventListener("click", (ev) => {
-  const jsonBtn = ev.target.closest("[data-act=log-json]");
-  if (jsonBtn) {
-    const row = jsonBtn.closest(".log-row");
-    const rec = logShown.find((r) => String(r.i) === row?.dataset.i);
-    const pretty = rec ? prettyJson(splitLogLine(rec.raw).body || rec.raw) : "";
-    if (!pretty) return;
-    const existing = row.querySelector(".json");
-    if (existing) existing.remove();
-    else {
-      const pre = document.createElement("pre");
-      pre.className = "json";
-      pre.textContent = pretty;
-      jsonBtn.after(pre);
-    }
-    return;
-  }
-  const row = ev.target.closest(".log-row");
-  if (row && !logWrapped()) row.classList.toggle("open");
-});
-try { const w = Number(localStorage.getItem("devboard.pane")); if (w >= 360) document.documentElement.style.setProperty("--pane", w + "px"); } catch {}
-$("#grip").addEventListener("pointerdown", (ev) => {
-  const grip = ev.currentTarget; grip.setPointerCapture(ev.pointerId); grip.classList.add("active");
-  const move = (e) => document.documentElement.style.setProperty("--pane", Math.max(360, Math.min(window.innerWidth * 0.92, window.innerWidth - e.clientX)) + "px");
-  const up = () => { grip.classList.remove("active"); grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up); try { localStorage.setItem("devboard.pane", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--pane"))); } catch {} };
-  grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up);
-});
-document.addEventListener("keydown", (ev) => {
-  const typing = ev.target.closest("input, textarea");
-  if (ev.key === "Escape") {
-    if (openLog && typing === $("#logFilter") && $("#logFilter").value) { $("#logFilter").value = ""; logMark = 0; paintLog(); return; }
-    if ($("#envPane").classList.contains("open")) { closeEnv(); return; }
-    if (openLog) closePane();
-    else if (!$("#addForm").hidden || !$("#projectForm").hidden || !$("#presetForm").hidden) closeForms();
-    return;
-  }
-  if (!openLog) return;
-  if (ev.key === "/" && !typing) { ev.preventDefault(); $("#logFilter").focus(); return; }
-  if (typing) {
-    if (ev.key === "Enter" && ev.shiftKey) { ev.preventDefault(); jumpMark(-1); }
-    else if (ev.key === "Enter") { ev.preventDefault(); jumpMark(1); }
-    return;
-  }
-  if (ev.key === "w") setWrap(!logWrapped());
-  else if (ev.key === "1") $$(".lvchip")[0]?.click();
-  else if (ev.key === "2") $$(".lvchip")[1]?.click();
-  else if (ev.key === "3") $$(".lvchip")[2]?.click();
-  else if (ev.key === "c" && !ev.metaKey && !ev.ctrlKey) $("#logClear").click();
-  else if (ev.key === "n") jumpMark(1);
-  else if (ev.key === "N" || ev.key === "p") jumpMark(-1);
-});
 
 function paintWt() {
   const prunable = wtStale.filter((w) => w.reason === "prunable");
@@ -619,33 +667,33 @@ function paintWt() {
       w.locked ? `<span class="badge locked">locked</span>` : "",
       w.detached ? `<span class="badge">detached</span>` : "",
     ].join(" ");
-    const ports = w.ports.map((p) => `<a class="port-link mono" href="http://127.0.0.1:${p}" target="_blank" rel="noopener" title="Open http://127.0.0.1:${p}">:${p}</a>`).join(" ");
-    return `<article class="card" data-path="${esc(w.path)}">
-      <div class="rail" style="background:${w.dirty ? "var(--amber)" : w.main ? "var(--cyan)" : "var(--violet)"}"></div>
-      <div class="ready-tag">${esc(w.branch || "detached")} · ${w.diskMb} MB</div>
+    const ports = w.ports.map((p) => `<a href="http://localhost:${p}" target="_blank" rel="noopener">:${p}</a>`).join(" ");
+    return `<article class="wt-card" data-path="${esc(w.path)}">
+      <div class="badge">${esc(w.branch || "detached")} · ${w.diskMb} MB</div>
       <div class="name">${esc(name)}</div>
-      <div class="path mono" title="${esc(w.path)}">${esc(home(w.path))}</div>
-      <div class="facts">${tags} ${ports || '<span class="mono">no servers</span>'}</div>
-      <div class="actions wt-acts">
-        <button data-act="wt-open" data-path="${esc(w.path)}">Open</button>
-        <button data-act="wt-launch" data-path="${esc(w.path)}">Launch</button>
-        ${w.main ? "" : `<button data-act="wt-retire" class="danger" data-path="${esc(w.path)}" data-dirty="${w.dirty ? "1" : ""}" data-locked="${w.locked ? "1" : ""}">Retire</button>`}
+      <div class="path" title="${esc(w.path)}">${esc(home(w.path))}</div>
+      <div>${tags} ${ports || '<span class="mono">no servers</span>'}</div>
+      <div class="wt-acts">
+        <button type="button" data-act="wt-open" data-path="${esc(w.path)}">Open</button>
+        <button type="button" data-act="wt-launch" data-path="${esc(w.path)}">Launch</button>
+        ${w.main ? "" : `<button type="button" data-act="wt-retire" class="danger" data-path="${esc(w.path)}" data-dirty="${w.dirty ? "1" : ""}" data-locked="${w.locked ? "1" : ""}">Retire</button>`}
       </div>
     </article>`;
-  }).join("") : `<p class="empty">Scan a folder to see every git checkout inside it.</p>`;
+  }).join("") : `<p class="empty-note">Scan a folder to see every git checkout inside it.</p>`;
   $("#staleLabel").hidden = wtStale.length === 0;
   $("#wtList").innerHTML = wtStale.map((w) => {
     const act = w.reason === "prunable"
-      ? `<button data-act="wt-prune" data-dir="${esc($("#wt-dir").value)}">Prune</button>`
-      : `<button data-act="wt-remove" class="danger" data-path="${esc(w.path)}">Remove folder</button>`;
+      ? `<button type="button" data-act="wt-prune" data-dir="${esc($("#wt-dir").value)}">Prune</button>`
+      : `<button type="button" data-act="wt-remove" class="danger" data-path="${esc(w.path)}">Remove folder</button>`;
     return `<div class="wtrow">
-      <div><div class="p mono" title="${esc(w.path)}">${esc(home(w.path))}</div><div class="why">${esc(w.detail)}${w.branch ? " · " + esc(w.branch) : ""}</div></div>
+      <div><div class="mono" title="${esc(w.path)}">${esc(home(w.path))}</div><div>${esc(w.detail)}${w.branch ? " · " + esc(w.branch) : ""}</div></div>
       <span class="badge ${esc(w.reason)}">${esc(w.reason)}</span>
       <span class="mono">${esc(home(w.repo).split("/").pop() || "")}</span>
       ${act}
     </div>`;
   }).join("");
 }
+
 async function scanWt() {
   const dir = $("#wt-dir").value.trim();
   if (!dir) return;
@@ -663,6 +711,7 @@ async function scanWt() {
     $("#wtScan").disabled = false;
   }
 }
+
 async function loadAttention() {
   const dir = lastWtDir() || "~/Documents/Personal/Projects";
   try {
@@ -672,97 +721,167 @@ async function loadAttention() {
       <span class="badge kind">${esc(a.kind.replace("-", " "))}</span>
       <div><strong>${esc(a.title)}</strong><p>${esc(a.detail)}</p></div>
       <div class="wt-acts">
-        ${a.serviceId ? `<button data-act="logs" data-id="${esc(a.serviceId)}">Logs</button>` : ""}
-        ${a.path ? `<button data-act="wt-open" data-path="${esc(a.path)}">Open</button>` : ""}
+        ${a.serviceId ? `<button type="button" data-act="select-alert" data-id="${esc(a.serviceId)}">Logs</button>` : ""}
+        ${a.path ? `<button type="button" data-act="wt-open" data-path="${esc(a.path)}">Open</button>` : ""}
       </div>
-    </article>`).join("") : `<p class="empty">Quiet. No port fights, crashes, dirty review trees, or oversized logs.</p>`;
-    paintStatus();
+    </article>`).join("") : `<p class="empty-note">Quiet. No port fights, crashes, dirty review trees, or oversized logs.</p>`;
   } catch (e) {
-    $("#alerts").innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+    $("#alerts").innerHTML = `<p class="empty-note">${esc(e.message)}</p>`;
   }
 }
 
-async function switchAll(on) {
-  const targets = latest.filter((s) => s.kind === "dev" && !s.hidden && (on ? s.status === "stopped" : s.status === "running"));
-  if (!targets.length) return;
-  if (!on && !confirm(`Switch off ${targets.length} running dev server${targets.length > 1 ? "s" : ""}? Unsaved ones get pinned first so you can switch them back on.`)) return;
-  for (const s of targets) setBusy(s.id, on ? "starting" : "stopping");
-  render();
-  for (const s of targets) {
-    try {
-      if (on) await api("POST", "/api/start", { id: s.id });
-      else { if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid }); await api("POST", "/api/kill", { rootPid: s.rootPid }); }
-    } catch (e) { busy.delete(s.id); toast(`${s.name}: ${e.message}`); }
-  }
-  refresh(); refreshSoon();
+async function fetchLog(id) {
+  if (!id) return;
+  const s = latest.find((x) => x.id === id);
+  if (!s?.hasLog) return;
+  try {
+    const { lines } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=4000`);
+    logs[id] = lines;
+    if (id === sel) { lastLogSig = ""; paintLog(); }
+    else { paintChrome(); paintList(); }
+  } catch {}
 }
-$("#startAll").onclick = () => switchAll(true);
-$("#stopAll").onclick = () => switchAll(false);
+
+async function hydrateLogs() {
+  const ids = latest.filter((s) => s.kind === "dev" && s.hasLog && s.id && logs[s.id] == null).map((s) => s.id);
+  await Promise.all(ids.slice(0, 24).map((id) => fetchLog(id)));
+}
+
+async function refresh() {
+  try {
+    const data = await api("GET", "/api/services");
+    latest = data.services;
+    projects = data.projects ?? [];
+    presets = data.presets ?? [];
+    render();
+    hydrateLogs();
+  } catch {
+    $("#counts").innerHTML = `<span class="err">server unreachable</span>`;
+  }
+}
+const refreshSoon = () => [700, 1600, 3000].forEach((ms) => setTimeout(refresh, ms));
 
 document.addEventListener("click", async (ev) => {
-  const btn = ev.target.closest("button[data-act]");
+  if (menu && !ev.target.closest(".menu") && !ev.target.closest("#moreBtn") && !ev.target.closest("#logMenuBtn")) closeMenu();
+  if (ev.target.closest("a[href]")) return;
+
+  const line = ev.target.closest(".log-line");
+  if (line && !ev.target.closest("button")) {
+    const s = selected();
+    const rec = (logs[s?.id] || [])[Number(line.dataset.i)];
+    if (rec) copy(stripAnsi(rec).replace(LOG_TS, "").trim() || stripAnsi(rec));
+    return;
+  }
+
+  const btn = ev.target.closest("button[data-act], [data-act=select]");
   if (!btn) return;
   const act = btn.dataset.act;
   const holder = btn.closest("[data-id]");
   const id = btn.dataset.id || holder?.dataset.id;
-  const s = latest.find((x) => x.id === id);
-  btn.disabled = true;
+  const s = latest.find((x) => x.id === id) || selected();
+
+  if (act === "select") {
+    if (ev.target.closest("button, a")) return;
+    select(id);
+    return;
+  }
+  if (act === "close-sheet") { closeSheet(); return; }
+  if (act === "start-all") { switchAll(true); return; }
+  if (act === "stop-all") { switchAll(false); return; }
+  if (act === "sheet-worktrees") {
+    openSheet("sheet-worktrees");
+    if (!$("#wt-dir").value) $("#wt-dir").value = lastWtDir() || "~/Documents/Personal/Projects";
+    if (!worktrees.length && !wtStale.length) scanWt();
+    return;
+  }
+  if (act === "sheet-project") { openProjectForm(null); return; }
+  if (act === "sheet-preset") { openPresetForm(); return; }
+  if (act === "sheet-attention") { openSheet("sheet-attention"); loadAttention(); return; }
+  if (act === "copy-cwd" && s) { copy(home(s.cwd) || s.cwd || ""); return; }
+  if (act === "copy-cmd" && s) { copy(s.command || ""); return; }
+  if (act === "copy-run" && s) { closeMenu(); copy(runCmd(s)); return; }
+  if (act === "open-browser" && s) {
+    closeMenu();
+    const p = portOf(s);
+    if (p) window.open(`http://localhost:${p}`, "_blank", "noopener");
+    return;
+  }
+  if (act === "toggle-err-only") { closeMenu(); errOnly = !errOnly; lastLogSig = ""; paintLog(); return; }
+  if (act === "toggle-follow") {
+    closeMenu();
+    follow = !follow;
+    if (follow) $("#logBody").scrollTop = $("#logBody").scrollHeight;
+    paintLog();
+    return;
+  }
+  if (act === "select-alert" && id) { closeSheet(); select(id); return; }
+
+  if (btn.tagName === "BUTTON") btn.disabled = true;
   try {
-    if (act === "toggle" && s) {
-      if (s.status === "running") {
-        setBusy(id, "stopping");
-        if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid });
-        await api("POST", "/api/kill", { rootPid: s.rootPid });
-      } else {
-        setBusy(id, "starting");
-        await api("POST", "/api/start", { id });
-      }
-    } else if (act === "restart" && s) {
-      setBusy(id, "starting");
-      await api("POST", "/api/restart", s.rootPid ? { rootPid: s.rootPid } : { id });
-    } else if (act === "pin" && s) {
-      await api("POST", "/api/pin", { rootPid: s.rootPid });
-    } else if (act === "env" && s) {
-      openEnv(s);
-    } else if (act === "edit" && s) {
-      showTab("board"); openForm(s);
-    } else if (act === "remove" && s) {
-      await api("DELETE", `/api/pin/${encodeURIComponent(id)}`);
-    } else if (act === "logs") {
-      if (s || id) openPane(id);
-    } else if (act === "hide" && s) {
-      await api("POST", "/api/ignore", { id });
-      if (openLog === id) closePane();
-    } else if (act === "unhide" && s) {
-      await api("DELETE", `/api/ignore/${encodeURIComponent(id)}`);
-    } else if (act === "kill-sys") {
+    if (act === "toggle" && s) await toggle(s);
+    else if ((act === "primary" || act === "restart") && s) {
+      if (rowState(s) === "busy") return;
+      if (s.status === "running" || act === "restart") await restart(s);
+      else await toggle(s);
+    }
+    else if (act === "pin" && s) { closeMenu(); await api("POST", "/api/pin", { rootPid: s.rootPid }); }
+    else if (act === "env" && s) { closeMenu(); await openEnv(s); }
+    else if (act === "edit" && s) { closeMenu(); openEdit(s); }
+    else if (act === "remove" && s) {
+      closeMenu();
+      if (!confirm(`Remove saved server ${s.name}?`)) return;
+      await api("DELETE", `/api/pin/${encodeURIComponent(s.id)}`);
+    }
+    else if (act === "hide" && s) {
+      closeMenu();
+      await api("POST", "/api/ignore", { id: s.id });
+    }
+    else if (act === "unhide" && s) await api("DELETE", `/api/ignore/${encodeURIComponent(s.id)}`);
+    else if (act === "kill-sys") {
       const name = holder?.dataset.name || "this process";
-      if (confirm(`Kill ${name}? It is a system process and macOS may restart it.`)) await api("POST", "/api/kill", { rootPid: Number(btn.dataset.root) });
-    } else if (act === "wt-prune") {
+      if (confirm(`Kill ${name}? It is a system process and macOS may restart it.`)) {
+        await api("POST", "/api/kill", { rootPid: Number(btn.dataset.root) });
+      }
+    }
+    else if (act === "open-editor" && s) {
+      closeMenu();
+      if (s.cwd) await api("POST", "/api/open", { path: s.cwd });
+    }
+    else if (act === "clear-log" && s) {
+      closeMenu();
+      if (!s.hasLog) return;
+      if (!confirm(`Clear the log file for ${s.name}? This truncates ~/.devboard/logs/${s.id}.log.`)) return;
+      await api("DELETE", `/api/logs/${encodeURIComponent(s.id)}`);
+      logs[s.id] = [];
+      lastLogSig = "";
+    }
+    else if (act === "wt-prune") {
       await api("POST", "/api/worktrees/prune", { dir: btn.dataset.dir || $("#wt-dir").value });
       await scanWt();
-    } else if (act === "wt-remove") {
-      if (!confirm(`Delete ${home(btn.dataset.path)}? It is an orphaned worktree folder, not a git repository.`)) { btn.disabled = false; return; }
+    }
+    else if (act === "wt-remove") {
+      if (!confirm(`Delete ${home(btn.dataset.path)}? It is an orphaned worktree folder, not a git repository.`)) return;
       await api("POST", "/api/worktrees/remove", { path: btn.dataset.path });
       await scanWt();
-    } else if (act === "wt-open") {
-      await api("POST", "/api/open", { path: btn.dataset.path });
-    } else if (act === "wt-launch") {
+    }
+    else if (act === "wt-open") await api("POST", "/api/open", { path: btn.dataset.path });
+    else if (act === "wt-launch") {
       const result = await api("POST", "/api/worktrees/launch", { path: btn.dataset.path });
       for (const err of result.errors ?? []) toast(`${err.id}: ${err.error}`);
       if (!(result.started ?? []).length) {
-        showTab("board");
-        openForm(null);
-        $("#f-cwd").value = btn.dataset.path;
-        $("#f-port").value = result.port;
-        loadSuggest(btn.dataset.path);
+        closeSheet();
+        if (!addOpen) toggleAdd();
+        $("#a-cwd").value = btn.dataset.path;
+        $("#a-port").value = result.port;
+        loadSuggest(btn.dataset.path, "#a-suggest", "#a-cmd", "#a-port");
         toast("No pinned servers in that checkout — add one on a free port.");
       }
-    } else if (act === "wt-retire") {
+    }
+    else if (act === "wt-retire") {
       const forceNeeded = btn.dataset.dirty === "1" || btn.dataset.locked === "1";
       if (!confirm(forceNeeded
         ? `Retire ${home(btn.dataset.path)}? It is dirty or locked. This force-removes the checkout.`
-        : `Retire ${home(btn.dataset.path)}? The branch stays in the repo.`)) { btn.disabled = false; return; }
+        : `Retire ${home(btn.dataset.path)}? The branch stays in the repo.`)) return;
       try {
         await api("POST", "/api/worktrees/retire", { path: btn.dataset.path, force: forceNeeded });
       } catch (e) {
@@ -771,23 +890,30 @@ document.addEventListener("click", async (ev) => {
         } else throw e;
       }
       await scanWt();
-    } else if (act === "group") {
-      await api("POST", `/api/projects/${encodeURIComponent(btn.dataset.project)}/members`, { id });
-    } else if (act === "ungroup") {
-      const projectId = btn.closest(".project")?.dataset.id;
-      if (projectId) await api("DELETE", `/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(id)}`);
-    } else if (act === "project-start") {
-      const projectId = holder.dataset.id;
+    }
+    else if (act === "group" && s) {
+      closeMenu();
+      await api("POST", `/api/projects/${encodeURIComponent(btn.dataset.project)}/members`, { id: s.id });
+    }
+    else if (act === "ungroup" && s) {
+      closeMenu();
+      const projectId = btn.dataset.project;
+      if (projectId) await api("DELETE", `/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(s.id)}`);
+    }
+    else if (act === "project-start") {
+      const projectId = id;
       for (const mid of (projects.find((p) => p.id === projectId)?.memberIds ?? [])) {
         const m = latest.find((x) => x.id === mid);
-        if (m?.status === "stopped") setBusy(mid, "starting");
+        if (m?.status === "stopped") { setBusy(mid, "starting"); appendStartLines(m); }
       }
+      lastLogSig = "";
       render();
       const result = await api("POST", `/api/projects/${encodeURIComponent(projectId)}/start`);
       for (const err of result.errors ?? []) toast(`${err.id}: ${err.error}`);
-    } else if (act === "project-stop") {
-      if (!confirm(`Stop every running server in ${holder.dataset.name}?`)) { btn.disabled = false; return; }
-      const projectId = holder.dataset.id;
+    }
+    else if (act === "project-stop") {
+      if (!confirm(`Stop every running server in ${btn.dataset.name || holder?.dataset.name}?`)) return;
+      const projectId = id;
       for (const mid of (projects.find((p) => p.id === projectId)?.memberIds ?? [])) {
         const m = latest.find((x) => x.id === mid);
         if (m?.status === "running") setBusy(mid, "stopping");
@@ -795,54 +921,105 @@ document.addEventListener("click", async (ev) => {
       render();
       const result = await api("POST", `/api/projects/${encodeURIComponent(projectId)}/stop`);
       for (const err of result.errors ?? []) toast(`${err.id}: ${err.error}`);
-    } else if (act === "project-folder") {
+    }
+    else if (act === "project-folder") {
       await api("POST", `/api/projects/${encodeURIComponent(holder.dataset.id)}/members`, { folder: holder.dataset.folder });
-    } else if (act === "project-edit") {
-      openProjectForm(projects.find((p) => p.id === holder.dataset.id));
-    } else if (act === "project-delete") {
-      if (!confirm(`Remove project ${holder.dataset.name}? The servers stay on the board.`)) { btn.disabled = false; return; }
+      paintProjectList();
+    }
+    else if (act === "project-edit") {
+      openProjectForm(projects.find((p) => p.id === (btn.dataset.id || holder?.dataset.id)));
+    }
+    else if (act === "project-delete") {
+      if (!confirm(`Remove project ${holder.dataset.name}? The servers stay on the board.`)) return;
       await api("DELETE", `/api/projects/${encodeURIComponent(holder.dataset.id)}`);
-    } else if (act === "preset-run") {
+    }
+    else if (act === "preset-run") {
       const result = await api("POST", `/api/presets/${encodeURIComponent(id)}/resume`);
       for (const err of result.errors ?? []) toast(`${err.id}: ${err.error}`);
       for (const mid of (presets.find((p) => p.id === id)?.serviceIds ?? [])) {
         const m = latest.find((x) => x.id === mid);
-        if (m?.status === "stopped") setBusy(mid, "starting");
+        if (m?.status === "stopped") { setBusy(mid, "starting"); appendStartLines(m); }
       }
+      lastLogSig = "";
       for (const url of result.urls ?? []) {
         try { window.open(url, "_blank", "noopener"); } catch {}
       }
-    } else if (act === "preset-del") {
-      if (!confirm(`Remove preset ${holder.dataset.id}?`)) { btn.disabled = false; return; }
+    }
+    else if (act === "preset-del") {
+      if (!confirm(`Remove preset ${holder?.dataset.id}?`)) return;
       await api("DELETE", `/api/presets/${encodeURIComponent(id)}`);
     }
   } catch (e) {
-    if (id) busy.delete(id);
+    if (id) clearBusy(id);
     toast(e.message);
   } finally {
-    btn.disabled = false;
+    if (btn.tagName === "BUTTON") btn.disabled = false;
     render();
     refresh();
-    if (["toggle", "restart", "project-start", "project-stop", "preset-run", "wt-launch"].includes(act)) refreshSoon();
+    if (["toggle", "restart", "primary", "project-start", "project-stop", "preset-run", "wt-launch"].includes(act)) refreshSoon();
   }
 });
 
-$("#logClose").onclick = closePane;
-$("#addBtn").onclick = () => { showTab("board"); $("#addForm").hidden ? openForm(null) : closeForms(); };
-$("#projectBtn").onclick = () => { showTab("board"); $("#projectForm").hidden ? openProjectForm(null) : closeForms(); };
-$("#presetBtn").onclick = () => { showTab("board"); $("#presetForm").hidden ? openPresetForm() : closeForms(); };
-$("#envClose").onclick = closeEnv;
-$("#envPane").onclick = (ev) => { if (ev.target === $("#envPane")) closeEnv(); };
-$("#f-cwd").addEventListener("blur", () => loadSuggest($("#f-cwd").value));
-$("#f-suggest").addEventListener("click", (ev) => {
-  const btn = ev.target.closest(".suggest");
-  if (!btn) return;
-  $("#f-cmd").value = btn.dataset.cmd || "";
-  if (btn.dataset.port) $("#f-port").value = btn.dataset.port;
+$("#moreBtn").onclick = (ev) => setMenu("top", ev);
+$("#addBtn").onclick = () => { closeMenu(); toggleAdd(); };
+$("#addCancel").onclick = () => { addOpen = false; $("#addForm").hidden = true; };
+$("#q").oninput = (ev) => { query = ev.target.value; paintList(); };
+$("#logFilter").oninput = (ev) => { logFilter = ev.target.value; lastLogSig = ""; paintLog(); };
+$("#errChip").onclick = (ev) => {
+  if (ev.shiftKey) { errOnly = !errOnly; lastLogSig = ""; paintLog(); }
+  else nextErr();
+};
+$("#followBtn").onclick = () => {
+  follow = true;
+  $("#logBody").scrollTop = $("#logBody").scrollHeight;
+  paintLog();
+};
+$("#logBody").addEventListener("scroll", () => {
+  const b = $("#logBody");
+  const atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 8;
+  if (!atBottom && follow) { follow = false; paintLogTools(selected()); }
+  else if (atBottom && !follow) { follow = true; paintLogTools(selected()); }
 });
-$("#addCancel").onclick = closeForms;
-$("#projectCancel").onclick = closeForms;
-$("#presetCancel").onclick = closeForms;
+$("#overlay").addEventListener("click", (ev) => { if (ev.target === $("#overlay")) closeSheet(); });
+
+$("#a-cwd").addEventListener("blur", () => loadSuggest($("#a-cwd").value, "#a-suggest", "#a-cmd", "#a-port"));
+$("#f-cwd").addEventListener("blur", () => loadSuggest($("#f-cwd").value, "#f-suggest", "#f-cmd", "#f-port"));
+function bindSuggest(box) {
+  box.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".suggest");
+    if (!btn) return;
+    const cmd = $(box.dataset.cmd);
+    const port = $(box.dataset.port);
+    if (cmd) cmd.value = btn.dataset.cmd || "";
+    if (port && btn.dataset.port) port.value = btn.dataset.port;
+  });
+}
+bindSuggest($("#a-suggest"));
+bindSuggest($("#f-suggest"));
+
+$("#addForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const data = Object.fromEntries(new FormData(f));
+  try {
+    await api("POST", "/api/pinned", { name: data.name, cwd: data.cwd, command: data.command, port: Number(data.port) });
+    addOpen = false;
+    f.hidden = true;
+    f.reset();
+    refresh();
+  } catch (e) { $("#addError").textContent = e.message; }
+};
+$("#editForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const data = Object.fromEntries(new FormData(f));
+  const body = { name: data.name, cwd: data.cwd, command: data.command, port: Number(data.port), healthUrl: data.healthUrl, envText: data.envText, restartOnCrash: f.elements.restartOnCrash.checked };
+  try {
+    await api("PUT", `/api/pinned/${encodeURIComponent(editingId)}`, body);
+    closeSheet();
+    refresh();
+  } catch (e) { $("#formError").textContent = e.message; }
+};
 $("#projectForm").onsubmit = async (ev) => {
   ev.preventDefault();
   const f = ev.target;
@@ -851,7 +1028,7 @@ $("#projectForm").onsubmit = async (ev) => {
   try {
     if (editingProjectId) await api("PUT", `/api/projects/${encodeURIComponent(editingProjectId)}`, body);
     else await api("POST", "/api/projects", body);
-    closeForms();
+    closeSheet();
     refresh();
   } catch (e) { $("#projectError").textContent = e.message; }
 };
@@ -868,18 +1045,11 @@ $("#presetForm").onsubmit = async (ev) => {
       worktree: data.worktree || undefined,
       openEditor: f.elements.openEditor.checked,
     });
-    closeForms();
-    refresh();
+    f.reset();
+    await refresh();
+    openPresetForm();
   } catch (e) { $("#presetError").textContent = e.message; }
 };
-document.addEventListener("change", async (ev) => {
-  const sel = ev.target.closest("select[data-act=group-select]");
-  if (!sel || !sel.value) return;
-  const id = sel.closest("[data-id]")?.dataset.id;
-  try { await api("POST", `/api/projects/${encodeURIComponent(sel.value)}/members`, { id }); }
-  catch (e) { toast(e.message); }
-  refresh();
-});
 $("#wtForm").onsubmit = async (ev) => { ev.preventDefault(); await scanWt(); };
 $("#wtPruneAll").onclick = async () => {
   try {
@@ -899,19 +1069,35 @@ $("#wtCreate").onsubmit = async (ev) => {
     await scanWt();
   } catch (e) { $("#wtCreateError").textContent = e.message; }
 };
-$("#addForm").onsubmit = async (ev) => {
-  ev.preventDefault();
-  const f = ev.target;
-  const data = Object.fromEntries(new FormData(f));
-  const body = { name: data.name, cwd: data.cwd, command: data.command, port: Number(data.port), healthUrl: data.healthUrl, envText: data.envText, restartOnCrash: f.elements.restartOnCrash.checked };
-  try {
-    if (editingId) await api("PUT", `/api/pinned/${encodeURIComponent(editingId)}`, body);
-    else await api("POST", "/api/pinned", body);
-    closeForms();
-    refresh();
-  } catch (e) { $("#formError").textContent = e.message; }
-};
 
+document.addEventListener("keydown", (ev) => {
+  const typing = ev.target.closest?.("input, textarea");
+  if (ev.key === "Escape") {
+    if (typing) { ev.target.blur(); return; }
+    if (menu) { closeMenu(); return; }
+    if (overlayOpen()) { closeSheet(); return; }
+    if (addOpen) { addOpen = false; $("#addForm").hidden = true; }
+    return;
+  }
+  if (typing) return;
+  if (ev.key === "/") { ev.preventDefault(); $("#q").focus(); return; }
+  if (overlayOpen()) return;
+  if (ev.key === "ArrowDown" || ev.key === "j") { ev.preventDefault(); moveSel(1); }
+  else if (ev.key === "ArrowUp" || ev.key === "k") { ev.preventDefault(); moveSel(-1); }
+  else if (ev.key === " ") { ev.preventDefault(); const s = selected(); if (s) toggle(s); }
+  else if (ev.key === "r") { const s = selected(); if (s?.status === "running") restart(s); }
+  else if (ev.key === "e") { ev.preventDefault(); nextErr(); }
+  else if (ev.key === "c" && !ev.metaKey && !ev.ctrlKey) { const s = selected(); if (s) copy(runCmd(s)); }
+  else if (ev.key === "o" && !ev.metaKey && !ev.ctrlKey) {
+    const s = selected();
+    const p = s && portOf(s);
+    if (p) window.open(`http://localhost:${p}`, "_blank", "noopener");
+  }
+});
+
+paintClock();
+paintChrome();
 refresh();
+setInterval(paintClock, 1000);
 setInterval(refresh, 3000);
-setInterval(renderLog, 2000);
+setInterval(() => { if (sel) fetchLog(sel); }, 2000);
