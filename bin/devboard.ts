@@ -76,10 +76,21 @@ async function up() {
   console.log(`board ${base}`);
 }
 
+async function swiftReady(): Promise<boolean> {
+  if (!Bun.which("swift")) return false;
+  const check = Bun.spawn(["swift", "--version"], { stdout: "ignore", stderr: "ignore" });
+  return (await check.exited) === 0;
+}
+
 async function install() {
   mkdirSync(join(homedir(), ".local", "bin"), { recursive: true });
   try { unlinkSync(BIN); } catch {}
   symlinkSync(join(ROOT, "bin/devboard.ts"), BIN);
+  if (!(await swiftReady())) {
+    console.log("menu bar app skipped: Swift 6 toolchain not found; install Xcode 16 or run bun run tray:build later");
+    console.log(`command: ${BIN}`);
+    return;
+  }
   const build = Bun.spawn(["/bin/zsh", join(ROOT, "scripts/build-tray.sh")], {
     cwd: ROOT,
     stdout: "inherit",
@@ -126,12 +137,15 @@ try {
     const out = await api("POST", "/api/restart", { id });
     console.log(`restarted ${id} pid ${out.pid}`);
   } else if (cmd === "logs" && id) {
-    let last = 0;
+    let from = 0;
+    let first = true;
     const once = async () => {
-      const data = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=200`) as { lines: string[] };
-      const lines = data.lines.slice(last);
-      last = data.lines.length;
-      if (lines.length) console.log(lines.join("\n"));
+      const q = first ? "lines=200" : `from=${from}`;
+      const data = await api("GET", `/api/logs/${encodeURIComponent(id)}?${q}`) as { lines: string[]; size: number; next?: number; reset?: boolean };
+      if (data.reset) console.log("--- log reset ---");
+      if (data.lines.length) console.log(data.lines.join("\n"));
+      from = data.next ?? data.size;
+      first = false;
     };
     await once();
     if (follow) {
@@ -147,10 +161,15 @@ try {
       catch (e) { console.error(`${s.id}: ${e instanceof Error ? e.message : e}`); }
     }
   } else if (cmd === "stop-all") {
-    const data = await api("GET", "/api/services") as { services: { id: string; kind: string; status: string; rootPid?: number }[] };
+    const data = await api("GET", "/api/services") as { services: { id: string; kind: string; status: string; rootPid?: number; pinned?: boolean }[] };
     for (const s of data.services.filter((x) => x.kind === "dev" && x.status === "running" && x.rootPid)) {
-      await api("POST", "/api/kill", { rootPid: s.rootPid });
-      console.log(`stopped ${s.id}`);
+      try {
+        if (!s.pinned) await api("POST", "/api/pin", { rootPid: s.rootPid });
+        await api("POST", "/api/kill", { rootPid: s.rootPid });
+        console.log(`stopped ${s.id}`);
+      } catch (e) {
+        console.error(`${s.id}: ${e instanceof Error ? e.message : e}`);
+      }
     }
   } else {
     usage();

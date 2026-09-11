@@ -45,7 +45,7 @@ describe("parseCwds", () => {
   test("maps pid to working directory", () => {
     const cwds = parseCwds(cwdText);
     expect(cwds.size).toBe(3);
-    expect(cwds.get(64672)).toBe("/Users/abbassbaz/Desktop/Sadie/OnCoreDocs");
+    expect(cwds.get(64672)).toBe("/Users/dev/Projects/docs-site");
     expect(cwds.get(835)).toBe("/opt/homebrew/var/db/redis");
   });
 });
@@ -158,7 +158,7 @@ describe("groupServices", () => {
     const docs = services.find((s) => s.rootPid === 64672)!;
     expect(docs.pids.sort()).toEqual([64672, 64728, 64734]);
     expect(docs.ports).toEqual([3010]);
-    expect(docs.command).toBe("node /Users/abbassbaz/.local/state/fnm_multishells/51664_1787044842120/bin/pnpm dev");
+    expect(docs.command).toBe("node /Users/dev/.local/state/fnm_multishells/51664_1787044842120/bin/pnpm dev");
     expect(services.find((s) => s.rootPid === 68729)!.command).toBe("npm exec -- next dev --port 3001");
     expect(docs.kind).toBe("dev");
     expect(docs.uptime).toBe("23-01:48:35");
@@ -184,13 +184,13 @@ describe("applyCwds", () => {
   test("sets cwd and derives name from package.json name or folder basename", () => {
     const services = groupServices(parseListeners(listenersText), parseProcesses(psText), 99999);
     const cwds = parseCwds(cwdText);
-    const names = new Map([[64672, "oncore-docs"]]);
+    const names = new Map([[64672, "docs-site"]]);
     const out = applyCwds(services, cwds, names);
     const docs = out.find((s) => s.rootPid === 64672)!;
-    expect(docs.cwd).toBe("/Users/abbassbaz/Desktop/Sadie/OnCoreDocs");
-    expect(docs.name).toBe("oncore-docs");
+    expect(docs.cwd).toBe("/Users/dev/Projects/docs-site");
+    expect(docs.name).toBe("docs-site");
     const proxy = out.find((s) => s.rootPid === 41727)!;
-    expect(proxy.name).toBe("core-proxy");
+    expect(proxy.name).toBe("proxy");
     const cc = out.find((s) => s.rootPid === 683)!;
     expect(cc.cwd).toBeUndefined();
     expect(cc.name).toBe("ControlCenter");

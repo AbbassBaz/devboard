@@ -1,8 +1,10 @@
 import { readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { Service, StaleWorktree, WorktreeInfo } from "./types";
-import { underFolder } from "./projects";
+import type { Pinned, Service, StaleWorktree, WorktreeInfo } from "./types";
+import { firstFreePort } from "./health";
+import { mapUnder, underFolder } from "./projects";
+import { rewriteCommandPort, rewriteUrlPort } from "./suggest";
 
 export const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? homedir() + p.slice(1) : p);
 
@@ -303,10 +305,53 @@ export async function createWorktree(repo: string, branch: string, dest?: string
   return { path, branch: name };
 }
 
-async function mainRepoOf(checkout: string): Promise<string> {
+export async function mainRepoOf(checkout: string): Promise<string> {
   const common = (await git(["-C", checkout, "rev-parse", "--git-common-dir"], true)).trim();
   const gitdir = isAbsolute(common) ? common : resolve(checkout, common);
   return dirname(gitdir);
+}
+
+export type LaunchCreate = Omit<Pinned, "id">;
+
+export type LaunchPlan = {
+  startIds: string[];
+  create: LaunchCreate[];
+};
+
+/** Copy main-checkout pins into a sibling worktree on free ports, or just start pins already there. */
+export function planWorktreeLaunch(worktree: string, repo: string, pinned: Pinned[], usedPorts: number[]): LaunchPlan {
+  const wt = worktree.replace(/\/+$/, "");
+  const root = repo.replace(/\/+$/, "");
+  const same = wt === root;
+  const used = [...usedPorts];
+  const startIds: string[] = [];
+  const create: LaunchCreate[] = [];
+
+  for (const t of pinned.filter((p) => underFolder(p.cwd, root))) {
+    const dest = same ? t.cwd : mapUnder(t.cwd, root, wt);
+    if (!dest) continue;
+    const existing = pinned.find((p) => p.cwd === dest && p.name === t.name);
+    if (existing) {
+      startIds.push(existing.id);
+      continue;
+    }
+    const port = firstFreePort(used);
+    used.push(port);
+    create.push({
+      name: t.name,
+      cwd: dest,
+      command: rewriteCommandPort(t.command, port),
+      port,
+      ...(t.healthUrl ? { healthUrl: rewriteUrlPort(t.healthUrl, port) } : {}),
+      ...(t.env && Object.keys(t.env).length ? { env: t.env } : {}),
+      ...(t.restartOnCrash ? { restartOnCrash: true } : {}),
+    });
+  }
+
+  for (const p of pinned) {
+    if (underFolder(p.cwd, wt) && !startIds.includes(p.id)) startIds.push(p.id);
+  }
+  return { startIds, create };
 }
 
 export async function retireWorktree(path: string, force = false): Promise<{ path: string }> {

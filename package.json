@@ -1,6 +1,7 @@
 {
   "name": "devboard",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "bin": {
@@ -11,7 +12,11 @@
     "dev": "bun --watch server.ts",
     "test": "bun test",
     "devboard": "bun run bin/devboard.ts",
-    "setup": "bun run bin/devboard.ts install"
+    "setup": "bun run bin/devboard.ts install",
+    "tray:build": "/bin/zsh scripts/build-tray.sh"
+  },
+  "engines": {
+    "bun": ">=1.2"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2"

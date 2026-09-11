@@ -29,8 +29,8 @@ test("discover() finds a real sh -c bun tree with cwd, ports and kind", async ()
   const services = await discover();
   const svc = services.find((s) => s.ports.includes(PORT));
   expect(svc).toBeDefined();
-  treePids = svc!.pids;
   expect(svc!.rootPid).toBe(tree.pid);
+  treePids = svc!.pids;
   expect(svc!.pids).toHaveLength(2);
   expect(svc!.kind).toBe("dev");
   expect(svc!.cwd).toBe(process.cwd());

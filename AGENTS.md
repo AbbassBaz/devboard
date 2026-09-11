@@ -6,7 +6,7 @@ Instructions for any coding agent working in this repo, whatever tool or model r
 
 A localhost dashboard for the dev servers on one Mac. Bun server on `127.0.0.1:4242`, vanilla JS page, a `devboard` CLI, and a Swift menu bar extra. It discovers listening processes with `lsof` and `ps`, collapses each dev-wrapper chain into one row, and can kill, start, restart, pin, group, and tail logs for them.
 
-Personal tool. One user, one machine, no auth, no remote mode. Do not add any of those.
+Loopback only by design; no remote mode or auth.
 
 ## Commands
 
@@ -14,7 +14,7 @@ Personal tool. One user, one machine, no auth, no remote mode. Do not add any of
 bun install
 bun run start                 # server + menu bar extra
 bun run dev                   # restarts on file change
-bun test                      # 125 tests, ~3s, one live test spawns a real process on :39999
+bun test                      # 144 tests, ~3s, one live test spawns a real process on :39999
 bash scripts/smoke.sh         # end-to-end against a real board; needs :4242 and :3999 free
 bun run devboard -- <cmd>     # CLI without installing
 bun run setup                 # symlink `devboard` into ~/.local/bin, build + install the tray app
@@ -43,23 +43,22 @@ DEVBOARD_TRAY=0 bun run start # server only, no menu bar extra
 | `bin/devboard.ts` | CLI. Talks to the board over HTTP at `DEVBOARD_URL`. |
 | `tray/` | SwiftPM menu bar app. Built by `scripts/build-tray.sh` into `tray/Dist/Devboard.app`. |
 | `test/` | One file per lib module plus `server.test.ts`. |
-| `design.md` | UI law for `public/`. Tokens, layout, keys, and behaviour are final. |
+| `design.md` | The current UI spec for `public/`. Amend it in the same PR as a UI change and say why. |
 | `agents/` | Scoped rules and role prompts. Plain markdown, no tool-specific format. |
-| `docs/superpowers/` | Original spec and plan. Historical, not maintained. |
 
 ## Before you change code
 
 - Read `lib/types.ts` and the one `lib/` module you are touching. Do not load all of `public/app.js` unless the task is UI; find the function you need instead.
-- UI work: read `design.md` in full first. It is short and it is law.
+- UI work: read `design.md` in full first. It is the current UI spec; amend it in the same PR as a UI change and say why.
 - Bug reports: reproduce with `bun test -t "<name>"` or a `curl` against a running board before editing.
 
 ## Rules
 
 **Bun and vanilla only.** No frameworks, no bundler, no new runtime deps without a written reason. `@types/bun` is the only dev dependency.
 
-**Bind to 127.0.0.1.** The API kills processes and runs saved shell commands. Never widen the host, add CORS, or accept a remote URL for the board.
+**Bind to 127.0.0.1.** The API kills processes and runs saved shell commands. Never widen the host, add CORS, or accept a remote URL for the board. `handle` rejects non-loopback Host/Origin (403), cross-site `Sec-Fetch-Site` (403), and non-JSON mutations (415). Tests may pass `allowedHosts` on `Deps`.
 
-**UI follows `design.md`.** Match its tokens, shell, keyboard map, and menus exactly. The scoped rule for this is `agents/graphite-ui.md`; apply it whenever a change touches `public/` or `design.md`. If a token or rule in `design.md` looks wrong, say so and stop. Do not edit `design.md` to match a UI change, and do not change the server to make a UI change easier.
+**UI follows `design.md`.** Match its tokens, shell, keyboard map, and menus. The scoped rule for this is `agents/graphite-ui.md`; apply it whenever a change touches `public/` or `design.md`. If a token or rule in `design.md` needs to change, amend it in the same PR and say why. Do not change the server to make a UI change easier.
 
 **Data shape first.** New behaviour starts as a type in `lib/types.ts`, then a pure function in `lib/`, then a route, then UI. Keep `lib/` free of I/O where a parser can take text instead (`parseListeners(text)`, `parseWorktreeList(text)`), so tests feed fixtures instead of shelling out.
 
@@ -83,9 +82,8 @@ For UI changes, start the board with `DEVBOARD_TRAY=0 bun run start`, open `http
 ## Do not
 
 - Commit `tray/.build/` or `tray/Dist/`. Both are ignored.
-- Touch `docs/superpowers/`. It is the historical spec.
 - Run `devboard install` or `bun run setup` unless asked. They write to `~/.local/bin` and `~/Applications`.
-- Add tool-specific instruction files (`.cursor/`, `.claude/`, `.github/copilot-*`, and so on). Everything goes here or in `agents/`.
+- Add tool-specific instruction files (`.cursor/`, `.claude/`, `.github/copilot-*`, and so on). Everything goes here or in `agents/`. A GitHub Actions workflow at `.github/workflows/ci.yml` is allowed.
 
 ## Gotchas that have already cost time
 

@@ -26,6 +26,18 @@ export function portFromCommand(command: string): number | undefined {
   return port >= 1 && port <= 65535 ? port : undefined;
 }
 
+/** Rewrite a saved command so a worktree copy listens on `port`. */
+export function rewriteCommandPort(command: string, port: number): string {
+  if (/--port[=\s]+\d+/i.test(command)) return command.replace(/--port[=\s]+\d+/i, `--port ${port}`);
+  if (/(?:^|\s)-p[=\s]+\d+(?=\s|$)/.test(command)) return command.replace(/(^|\s)-p[=\s]+\d+(?=\s|$)/, `$1-p ${port}`);
+  if (/\bPORT=\d+/.test(command)) return command.replace(/\bPORT=\d+/, `PORT=${port}`);
+  return `PORT=${port} ${command}`;
+}
+
+export function rewriteUrlPort(url: string, port: number): string {
+  return url.replace(/^(https?:\/\/[^/:]+):\d+/i, `$1:${port}`);
+}
+
 const PREFERRED = ["dev", "start", "storybook", "preview"];
 const PREFERRED_PREFIX = /^(dev|start|storybook|preview):/;
 const SERVER_CMD = /\b(vite|next|nuxt|remix|astro|storybook|nodemon|webpack-dev-server|wrangler)\b|--watch\b|--hot\b|--port\b|\bPORT=|\btsx watch\b|\bbun --watch\b|\bbun --hot\b/i;

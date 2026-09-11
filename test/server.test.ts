@@ -12,12 +12,12 @@ const home = mkdtempSync(join(tmpdir(), "devboard-"));
 const registry = new Registry(home);
 const control = new Control(home);
 let running: RunningService[] = [];
-const handle = createHandler({ discover: async () => running, registry, control });
+const handle = createHandler({ discover: async () => running, registry, control, allowedHosts: ["devboard.test"] });
 
 const docs: RunningService = {
   rootPid: 64672, pids: [64672, 64728, 64734], ports: [3010],
   cwd: home, command: "node /x/pnpm dev",
-  name: "oncore-docs", kind: "dev", uptime: "23-01:48:35", cpu: 0.2, memMb: 149,
+  name: "docs-site", kind: "dev", uptime: "23-01:48:35", cpu: 0.2, memMb: 149,
 };
 
 const spawned: number[] = [];
@@ -30,8 +30,8 @@ afterAll(() => {
 const call = (method: string, path: string, body?: unknown) =>
   handle(new Request(`http://devboard.test${path}`, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: method === "GET" ? undefined : { "content-type": "application/json" },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   }));
 
 describe("GET /", () => {
@@ -46,6 +46,7 @@ describe("GET /", () => {
     expect(html).toContain('id="projectBtn"');
     expect(html).toContain("/app.js");
     expect(html).toContain("/app.css");
+    expect(html).not.toContain("fonts.googleapis.com");
   });
 
   test("serves the split stylesheet and script", async () => {
@@ -77,12 +78,12 @@ describe("GET /api/services", () => {
 describe("POST /api/ignore and DELETE /api/ignore/:id", () => {
   test("hides a service by id and shows it again", async () => {
     running = [docs];
-    expect((await call("POST", "/api/ignore", { id: "oncore-docs-3010" })).status).toBe(200);
+    expect((await call("POST", "/api/ignore", { id: "docs-site-3010" })).status).toBe(200);
     let list = (await (await call("GET", "/api/services")).json()).services;
-    expect(list.find((s: Service) => s.id === "oncore-docs-3010")).toMatchObject({ hidden: true, status: "running" });
-    expect((await call("DELETE", "/api/ignore/oncore-docs-3010")).status).toBe(200);
+    expect(list.find((s: Service) => s.id === "docs-site-3010")).toMatchObject({ hidden: true, status: "running" });
+    expect((await call("DELETE", "/api/ignore/docs-site-3010")).status).toBe(200);
     list = (await (await call("GET", "/api/services")).json()).services;
-    expect(list.find((s: Service) => s.id === "oncore-docs-3010")!.hidden).toBe(false);
+    expect(list.find((s: Service) => s.id === "docs-site-3010")!.hidden).toBe(false);
     expect((await call("POST", "/api/ignore", {})).status).toBe(400);
   });
 });
@@ -126,11 +127,11 @@ describe("POST /api/pin and DELETE /api/pin/:id", () => {
     running = [docs];
     const res = await call("POST", "/api/pin", { rootPid: 64672 });
     expect(res.status).toBe(200);
-    expect((await res.json()).pinned.id).toBe("oncore-docs-3010");
-    expect((await registry.load()).some((p) => p.id === "oncore-docs-3010")).toBe(true);
-    const del = await call("DELETE", "/api/pin/oncore-docs-3010");
+    expect((await res.json()).pinned.id).toBe("docs-site-3010");
+    expect((await registry.load()).some((p) => p.id === "docs-site-3010")).toBe(true);
+    const del = await call("DELETE", "/api/pin/docs-site-3010");
     expect(del.status).toBe(200);
-    expect((await call("DELETE", "/api/pin/oncore-docs-3010")).status).toBe(404);
+    expect((await call("DELETE", "/api/pin/docs-site-3010")).status).toBe(404);
   });
 
   test("404 when the rootPid is not running, 400 when missing", async () => {
@@ -209,6 +210,32 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     expect((await (await call("GET", "/api/logs/echo-1")).json()).lines.some((l: string) => l.includes("cleared"))).toBe(true);
     expect((await call("DELETE", "/api/logs/nothing-here")).status).toBe(404);
   });
+
+  test("GET /api/logs/:id?from= follows by byte offset and resets after clear", async () => {
+    mkdirSync(control.logDir, { recursive: true });
+    const path = control.logPath("follow-1");
+    writeFileSync(path, Array.from({ length: 150 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
+    const first = await (await call("GET", "/api/logs/follow-1?from=0")).json();
+    expect(first.lines).toHaveLength(150);
+    writeFileSync(path, Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n") + "\nsame\nsame\n");
+    const second = await (await call("GET", `/api/logs/follow-1?from=${first.next}`)).json();
+    expect(second.lines[0]).toBe("line 151");
+    expect(second.lines.slice(-2)).toEqual(["same", "same"]);
+    expect((await call("DELETE", "/api/logs/follow-1")).status).toBe(200);
+    const after = await (await call("GET", `/api/logs/follow-1?from=${second.next}`)).json();
+    expect(after.reset).toBe(true);
+    expect(after.lines.some((l: string) => l.includes("cleared"))).toBe(true);
+  });
+
+  test("log ids cannot escape the log directory", async () => {
+    const outside = join(home, "..", "outside.log");
+    writeFileSync(outside, "leave me alone\n");
+    const get = await call("GET", "/api/logs/..%2F..%2Foutside");
+    const del = await call("DELETE", "/api/logs/..%2F..%2Foutside");
+    expect(get.status).toBe(400);
+    expect(del.status).toBe(400);
+    expect(await Bun.file(outside).text()).toBe("leave me alone\n");
+  });
 });
 
 describe("GET /api/worktrees and prune/remove", () => {
@@ -245,6 +272,42 @@ describe("GET /api/worktrees and prune/remove", () => {
     expect(removed.status).toBe(200);
     const again = await (await call("GET", `/api/worktrees?dir=${encodeURIComponent(root)}`)).json();
     expect(again.stale).toEqual([]);
+  });
+
+  test("launch copies main-checkout pins into a worktree on free ports", async () => {
+    const root = mkdtempSync(join(tmpdir(), "devboard-launch-"));
+    const repo = join(root, "app");
+    const linked = join(root, "app-feat");
+    const git = async (cwd: string, args: string[]) => {
+      const proc = Bun.spawn(["git", "-c", "user.name=devboard", "-c", "user.email=devboard@test", ...args], {
+        cwd, stdout: "ignore", stderr: "pipe",
+      });
+      const err = await new Response(proc.stderr).text();
+      if ((await proc.exited) !== 0) throw new Error(err);
+    };
+    await git(root, ["init", "-q", "app"]);
+    mkdirSync(join(repo, "apps", "api"), { recursive: true });
+    writeFileSync(join(repo, "apps", "api", "ok.txt"), "1");
+    await git(repo, ["add", "."]);
+    await git(repo, ["commit", "-qm", "api"]);
+    await git(repo, ["worktree", "add", "-q", "-b", "feat", linked]);
+
+    running = [];
+    await registry.save([]);
+    await registry.add({
+      name: "api", cwd: join(repo, "apps", "api"),
+      command: "echo launched --port 3003", port: 3003,
+    });
+    const res = await call("POST", "/api/worktrees/launch", { path: linked });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.created).toHaveLength(1);
+    expect(body.created[0].name).toBe("api");
+    expect(body.created[0].cwd.endsWith("/app-feat/apps/api")).toBe(true);
+    expect(body.created[0].port).not.toBe(3003);
+    expect(body.created[0].command).toBe(`echo launched --port ${body.created[0].port}`);
+    expect(body.started[0].id).toBe(body.created[0].id);
+    spawned.push(body.started[0].pid);
   });
 });
 
@@ -345,6 +408,12 @@ describe("healthUrl, ports, presets and attention", () => {
     expect((await call("GET", "/api/suggest")).status).toBe(400);
   });
 
+  test("serves a self-hosted font", async () => {
+    const res = await call("GET", "/fonts/IBMPlexSans-Regular.woff2");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("font/woff2");
+  });
+
   test("GET /api/env reads the current process environment", async () => {
     const res = await call("GET", `/api/env?pid=${process.pid}`);
     expect(res.status).toBe(200);
@@ -362,5 +431,51 @@ describe("healthUrl, ports, presets and attention", () => {
     expect(res.status).toBe(200);
     const { alerts } = await res.json();
     expect(alerts.some((a: { kind: string }) => a.kind === "port-conflict")).toBe(true);
+  });
+});
+
+describe("request gate", () => {
+  test("Host: evil.example gets 403", async () => {
+    const res = await handle(new Request("http://evil.example/api/services"));
+    expect(res.status).toBe(403);
+  });
+
+  test("POST with content-type: text/plain gets 415", async () => {
+    const res = await handle(new Request("http://devboard.test/api/ignore", {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ id: "x" }),
+    }));
+    expect(res.status).toBe(415);
+  });
+
+  test("POST with Origin: http://evil.example gets 403", async () => {
+    const res = await handle(new Request("http://devboard.test/api/ignore", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://evil.example" },
+      body: JSON.stringify({ id: "x" }),
+    }));
+    expect(res.status).toBe(403);
+  });
+
+  test("Origin: null gets 403", async () => {
+    const res = await handle(new Request("http://devboard.test/api/services", {
+      headers: { origin: "null" },
+    }));
+    expect(res.status).toBe(403);
+  });
+
+  test("POST with Origin: http://127.0.0.1:4242 and JSON passes", async () => {
+    const res = await handle(new Request("http://devboard.test/api/ignore", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://127.0.0.1:4242" },
+      body: JSON.stringify({ id: "gate-ok" }),
+    }));
+    expect(res.status).toBe(200);
+  });
+
+  test("POST with no Origin and JSON passes", async () => {
+    const res = await call("POST", "/api/ignore", { id: "gate-cli" });
+    expect(res.status).toBe(200);
   });
 });

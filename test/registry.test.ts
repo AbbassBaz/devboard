@@ -7,9 +7,9 @@ import type { RunningService } from "../lib/types";
 
 const running: RunningService = {
   rootPid: 41727, pids: [41727], ports: [3000],
-  cwd: "/Users/abbassbaz/Desktop/Sadie/CoreAgentsHub/apps/core-proxy",
+  cwd: "/Users/dev/Projects/app/apps/proxy",
   command: "bun run --preload ./src/instrumentation.ts --watch src/index.ts",
-  name: "@sadie/core-proxy", kind: "dev", uptime: "01:00", cpu: 0, memMb: 54,
+  name: "@acme/proxy", kind: "dev", uptime: "01:00", cpu: 0, memMb: 54,
 };
 
 let registry: Registry;
@@ -19,12 +19,12 @@ beforeEach(() => {
 
 describe("ids", () => {
   test("slugify lowercases and collapses non-alphanumerics", () => {
-    expect(slugify("@sadie/core-proxy")).toBe("sadie-core-proxy");
-    expect(slugify("  OnCore Docs ")).toBe("oncore-docs");
+    expect(slugify("@acme/proxy")).toBe("acme-proxy");
+    expect(slugify("  Docs Site ")).toBe("docs-site");
     expect(slugify("///")).toBe("service");
   });
   test("pinnedId appends the port", () => {
-    expect(pinnedId("@sadie/core-proxy", 3000)).toBe("sadie-core-proxy-3000");
+    expect(pinnedId("@acme/proxy", 3000)).toBe("acme-proxy-3000");
   });
 });
 
@@ -36,13 +36,13 @@ describe("Registry", () => {
   test("pin saves name, cwd, command and first port; pinning again replaces", async () => {
     const pinned = await registry.pin(running);
     expect(pinned).toEqual({
-      id: "sadie-core-proxy-3000", name: "@sadie/core-proxy",
+      id: "acme-proxy-3000", name: "@acme/proxy",
       cwd: running.cwd, command: running.command, port: 3000,
     });
     await registry.pin(running, "Core Proxy");
     const list = await registry.load();
     expect(list).toHaveLength(2); // different name => different id
-    expect(list.map((p) => p.id).sort()).toEqual(["core-proxy-3000", "sadie-core-proxy-3000"]);
+    expect(list.map((p) => p.id).sort()).toEqual(["acme-proxy-3000", "core-proxy-3000"]);
     await registry.pin(running);
     expect(await registry.load()).toHaveLength(2); // same id replaced, not duplicated
   });
@@ -58,9 +58,9 @@ describe("Registry", () => {
 
   test("replace edits in place, renames the id when name or port change, and reports unknown ids", async () => {
     await registry.add({ name: "Docs", cwd: "/tmp", command: "pnpm dev", port: 3010 });
-    const edited = await registry.replace("docs-3010", { name: "OnCore Docs", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
-    expect(edited).toEqual({ id: "oncore-docs-3011", name: "OnCore Docs", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
-    expect((await registry.load()).map((p) => p.id)).toEqual(["oncore-docs-3011"]);
+    const edited = await registry.replace("docs-3010", { name: "Docs Site", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
+    expect(edited).toEqual({ id: "docs-site-3011", name: "Docs Site", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
+    expect((await registry.load()).map((p) => p.id)).toEqual(["docs-site-3011"]);
     expect(await registry.replace("docs-3010", { name: "x", cwd: "/tmp", command: "true", port: 1 })).toBeUndefined();
   });
 
@@ -70,18 +70,18 @@ describe("Registry", () => {
 
   test("unpin removes and reports whether anything was removed", async () => {
     await registry.pin(running);
-    expect(await registry.unpin("sadie-core-proxy-3000")).toBe(true);
-    expect(await registry.unpin("sadie-core-proxy-3000")).toBe(false);
+    expect(await registry.unpin("acme-proxy-3000")).toBe(true);
+    expect(await registry.unpin("acme-proxy-3000")).toBe(false);
     expect(await registry.load()).toEqual([]);
   });
 
   test("ignored ids round-trip and can be removed again", async () => {
     expect(await registry.loadIgnored()).toEqual(new Set());
-    await registry.setIgnored("sadie-17039", true);
-    await registry.setIgnored("abbassbaz-37777", true);
-    expect([...(await registry.loadIgnored())]).toEqual(["abbassbaz-37777", "sadie-17039"]);
-    await registry.setIgnored("sadie-17039", false);
-    expect([...(await registry.loadIgnored())]).toEqual(["abbassbaz-37777"]);
+    await registry.setIgnored("helper-17039", true);
+    await registry.setIgnored("hidden-37777", true);
+    expect([...(await registry.loadIgnored())]).toEqual(["helper-17039", "hidden-37777"]);
+    await registry.setIgnored("helper-17039", false);
+    expect([...(await registry.loadIgnored())]).toEqual(["hidden-37777"]);
   });
 
   test("save writes pretty JSON with a trailing newline", async () => {

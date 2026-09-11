@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   assignMember,
+  mapUnder,
   parseLinks,
   projectViews,
   pruneProjectMembers,
@@ -13,31 +14,39 @@ import type { Project, Service } from "../lib/types";
 
 const api: Service = {
   id: "core-api-3003", name: "core-api", kind: "dev", status: "running",
-  ports: [3003], cwd: "/Users/x/CoreAgentsHub/apps/core-api", pinned: true, hasLog: false, hidden: false,
+  ports: [3003], cwd: "/Users/dev/Projects/app/apps/api", pinned: true, hasLog: false, hidden: false,
   cpu: 0.4, memMb: 90,
 };
 const proxy: Service = {
   id: "core-proxy-3000", name: "core-proxy", kind: "dev", status: "stopped",
-  ports: [3000], cwd: "/Users/x/CoreAgentsHub/apps/core-proxy", pinned: true, hasLog: true, hidden: false,
+  ports: [3000], cwd: "/Users/dev/Projects/app/apps/proxy", pinned: true, hasLog: true, hidden: false,
 };
 const docs: Service = {
   id: "docs-3010", name: "docs", kind: "dev", status: "running",
-  ports: [3010], cwd: "/Users/x/OnCoreDocs", pinned: true, hasLog: false, hidden: false,
+  ports: [3010], cwd: "/Users/dev/Projects/docs-site", pinned: true, hasLog: false, hidden: false,
   cpu: 0.2, memMb: 40,
 };
 
 describe("underFolder", () => {
   test("matches the folder and its descendants, not a sibling prefix", () => {
-    expect(underFolder("/Users/x/CoreAgentsHub/apps/core-api", "/Users/x/CoreAgentsHub")).toBe(true);
-    expect(underFolder("/Users/x/CoreAgentsHub", "/Users/x/CoreAgentsHub")).toBe(true);
-    expect(underFolder("/Users/x/CoreAgentsHub-old/app", "/Users/x/CoreAgentsHub")).toBe(false);
-    expect(underFolder(undefined, "/Users/x/CoreAgentsHub")).toBe(false);
+    expect(underFolder("/Users/dev/Projects/app/apps/api", "/Users/dev/Projects/app")).toBe(true);
+    expect(underFolder("/Users/dev/Projects/app", "/Users/dev/Projects/app")).toBe(true);
+    expect(underFolder("/Users/dev/Projects/app-old/web", "/Users/dev/Projects/app")).toBe(false);
+    expect(underFolder(undefined, "/Users/dev/Projects/app")).toBe(false);
+  });
+});
+
+describe("mapUnder", () => {
+  test("rewrites a cwd from the main checkout into a sibling worktree", () => {
+    expect(mapUnder("/Users/dev/Projects/app/apps/api", "/Users/dev/Projects/app", "/Users/dev/Projects/app-feat")).toBe("/Users/dev/Projects/app-feat/apps/api");
+    expect(mapUnder("/Users/dev/Projects/app", "/Users/dev/Projects/app", "/Users/dev/Projects/app-feat")).toBe("/Users/dev/Projects/app-feat");
+    expect(mapUnder("/Users/dev/Projects/other", "/Users/dev/Projects/app", "/Users/dev/Projects/app-feat")).toBeUndefined();
   });
 });
 
 describe("servicesInFolder", () => {
   test("keeps only dev services under the folder", () => {
-    const ids = servicesInFolder([api, proxy, docs], "/Users/x/CoreAgentsHub").map((s) => s.id);
+    const ids = servicesInFolder([api, proxy, docs], "/Users/dev/Projects/app").map((s) => s.id);
     expect(ids).toEqual(["core-api-3003", "core-proxy-3000"]);
   });
 });

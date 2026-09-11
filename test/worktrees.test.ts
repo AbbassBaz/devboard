@@ -3,11 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync, realpathSync } from "node:fs";
-import type { Service } from "../lib/types";
+import type { Pinned, Service } from "../lib/types";
 import {
   createWorktree,
   parseGitdirFile,
   parseWorktreeList,
+  planWorktreeLaunch,
   pruneStaleWorktrees,
   removeOrphanedWorktree,
   retireWorktree,
@@ -201,5 +202,45 @@ describe("scan, create and retire worktrees", () => {
     await expect(retireWorktree(created.path)).rejects.toThrow("uncommitted");
     expect((await retireWorktree(created.path, true)).path).toBe(created.path);
     expect(existsSync(created.path)).toBe(false);
+  });
+});
+
+describe("planWorktreeLaunch", () => {
+  const api: Pinned = {
+    id: "api-3003", name: "api", cwd: "/repo/apps/api",
+    command: "bun run --watch src/index.ts --port 3003", port: 3003,
+    healthUrl: "http://127.0.0.1:3003/health",
+  };
+  const web: Pinned = {
+    id: "web-3000", name: "web", cwd: "/repo/apps/web",
+    command: "next dev --port 3000", port: 3000,
+  };
+
+  test("copies main pins into a sibling tree on the next free ports", () => {
+    const plan = planWorktreeLaunch("/repo-feat", "/repo", [api, web], [3000, 3003]);
+    expect(plan.startIds).toEqual([]);
+    expect(plan.create).toEqual([
+      {
+        name: "api", cwd: "/repo-feat/apps/api",
+        command: "bun run --watch src/index.ts --port 3001", port: 3001,
+        healthUrl: "http://127.0.0.1:3001/health",
+      },
+      {
+        name: "web", cwd: "/repo-feat/apps/web",
+        command: "next dev --port 3002", port: 3002,
+      },
+    ]);
+  });
+
+  test("starts an already-pinned worktree copy instead of creating another", () => {
+    const copy: Pinned = { id: "api-3012", name: "api", cwd: "/repo-feat/apps/api", command: "bun --port 3012", port: 3012 };
+    const plan = planWorktreeLaunch("/repo-feat", "/repo", [api, copy], [3003, 3012]);
+    expect(plan.startIds).toEqual(["api-3012"]);
+    expect(plan.create).toEqual([]);
+  });
+
+  test("launching the main checkout only starts pins already there", () => {
+    const plan = planWorktreeLaunch("/repo", "/repo", [api], [3003]);
+    expect(plan).toEqual({ startIds: ["api-3003"], create: [] });
   });
 });

@@ -1,6 +1,6 @@
 # Graphite workspace
 
-Standing UI rules for `public/index.html`, `public/app.js`, and `public/app.css`. Colors, type, spacing, radii, and states are final — match them, do not restyle. Vanilla JS + Bun, no frameworks. No server changes for UI work; wire actions to the existing `/api/*` endpoints.
+Standing UI rules for `public/index.html`, `public/app.js`, and `public/app.css`. Match the tokens, shell, and behaviour here; if they need to change, amend this file in the same PR and say why. Vanilla JS + Bun, no frameworks. No server changes for UI work; wire actions to the existing `/api/*` endpoints.
 
 ## Principles
 
@@ -10,6 +10,22 @@ Standing UI rules for `public/index.html`, `public/app.js`, and `public/app.css`
 - Keyboard-first. Keys are ignored while an input is focused (`Esc` blurs).
 - Dense, IDE-like, dark. No grain, gradients, display type, or card-grid chrome.
 - Secondary surfaces (worktrees, projects, presets, attention, env, full edit) open as overlay sheets from the top-bar or log `···` menu — never as extra top-level views.
+
+## The page
+
+Dark, dense, keyboard-first. Three fixed rows: a 44px top bar, the workspace, and a 28px status bar with the key map. The workspace is a sidebar and a log pane.
+
+**Top bar.** Counts of servers up, down, and with errors in their log. A clock. `+ Add` opens the add form. `···` holds Start all, Stop all, and the sheets: Worktrees, New project, Presets, Attention.
+
+**Sidebar.** One row per dev server, grouped under its project (or "Other"). Each row has a state dot, the name, a port link, `pid · cpu · MB · uptime` when running, an error count when the log has errors, a CPU bar, and a switch. The switch is the state: green and on means running, grey and off means stopped, amber means starting or stopping. Switching off kills the process tree; an unpinned server is pinned first so it stays on the board and can be switched back on. Switching on runs the saved command. Each group header has its own `start` and `stop` for the whole project. The filter box at the top matches name or port; `/` focuses it. System processes (Postgres, Redis, macOS services) sit in a collapsed **System** list with only a Kill action. Hidden servers sit in a collapsed **Hidden** list with a Show action.
+
+**Log pane.** The selected server: dot, name, `localhost:PORT ↗`, and state. One primary button: **Start** when stopped, **Restart** when running. `···` holds Open in browser, Open in editor, Copy run command, Show errors only, Follow, Clear log, then Pin or Edit, Env, Add to or Remove from a project, Hide, and Remove. Under that, click-to-copy `cwd` and `$ command`. The toolbar has a text filter, an error chip that appears only when the log has errors (click jumps to the next one, shift-click shows errors only), and a `↓ Resume follow` button that appears only when you have scrolled away from the tail. Lines are coloured by content: errors red, warnings amber, ready and listening green. Click a line to copy it. Timestamps show only when the log has them.
+
+**Keys.** `↑↓` or `j`/`k` select. `space` toggles the selected server. `r` restarts. `e` jumps to the next error. `c` copies `cd <cwd> && <command>`. `o` opens the port in the browser. `/` focuses the filter. `Esc` closes a menu or sheet. Keys are ignored while an input has focus.
+
+**Sheets.** Worktrees, projects, presets, attention, env, and the full server edit open as overlays from the `···` menus. `Esc` or a click on the backdrop closes them. Destructive actions (stop all, stop project, kill system, remove, clear log) ask first.
+
+The token, layout, and state rules below are the rest of the spec.
 
 ## Shell
 
@@ -79,7 +95,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 - Filter 28px, radius 5, bg `#16181c`, placeholder “Filter servers  /”. Name or port. `/` focuses it.
 - `+ Add` opens an inline form under the filter (bg `#1c1f24`): name, folder, command \| port (`1fr 80px`), Cancel / **Add** (accent fill, ink, 600). Folder blur → `GET /api/suggest`. Submit → `POST /api/pinned`. Extra fields (health, env, restart-on-crash) stay on the Edit sheet.
-- Group header (`10px 12px 4px`, 11px): uppercase 600 `.06em` `#aeb4bf` (project name, or “Other”) · mono `running/total` dim · project text buttons `start` / `stop` (hover `#23272e`, green / red) → `/api/projects/:id/start|stop`.
+- Group header (`10px 12px 4px`, 11px): uppercase 600 `.06em` `#aeb4bf` (project name, or “Other”) · mono `running/total` dim · localhost port links `:3000` and any saved project links · project text buttons `start` / `stop` (hover `#23272e`, green / red) → `/api/projects/:id/start|stop`.
 - Row: `10px 1fr auto auto`, gap 10, margin `0 6px`, padding `7px 8px 7px 10px`, radius 6. Selected `#242932`, hover `#23272e`. Click selects.
   - Dot 8px: running `#4fb477` + ring; busy `#d4a72c` pulse `.8s`; stopped `#3a3e46`.
   - Name 500 (`#8b919c` if stopped) + port link `:3003` → `http://localhost:PORT`.
