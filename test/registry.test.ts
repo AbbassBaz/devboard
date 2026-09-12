@@ -156,6 +156,13 @@ describe("Registry", () => {
     expect(await registry.deletePreset("frontend-only")).toBe(false);
   });
 
+  test("replacePreset keeps the id when the name changes", async () => {
+    await registry.addPreset({ name: "Stack", serviceIds: ["a"], urls: [] });
+    const edited = await registry.replacePreset("stack", { name: "Full stack", serviceIds: ["a", "b"], urls: ["http://127.0.0.1:3000"] });
+    expect(edited).toMatchObject({ id: "stack", name: "Full stack", serviceIds: ["a", "b"] });
+    expect(await registry.replacePreset("missing", { name: "x", serviceIds: [], urls: [] })).toBeUndefined();
+  });
+
   test("a non-array services.json loads as [] and is left untouched", async () => {
     writeFileSync(registry.path, '{ "nope": true }\n');
     expect(await registry.load()).toEqual([]);

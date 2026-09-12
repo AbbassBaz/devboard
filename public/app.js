@@ -28,6 +28,7 @@ let toastText = "";
 let editingId = null;
 let editingProjectId = null;
 let restartAfterSave = null;
+let editingPresetId = null;
 let clock = nowClock();
 let toastTimer = 0;
 let lastLogSig = "";
@@ -113,6 +114,7 @@ function closeSheet() {
   hideSheets();
   editingId = null;
   editingProjectId = null;
+  editingPresetId = null;
   restartAfterSave = null;
   const note = $("#f-lossy-note");
   if (note) note.hidden = true;
@@ -669,17 +671,30 @@ function paintProjectList() {
   </div>`).join("");
 }
 
-function openPresetForm() {
+function openPresetForm(p) {
   const f = $("#presetForm");
   f.reset();
+  const selected = new Set(p?.serviceIds ?? []);
   const dev = latest.filter((s) => s.kind === "dev" && !s.hidden && s.id);
   $("#pr-services").innerHTML = dev.length
-    ? dev.map((s) => `<label class="check"><input type="checkbox" name="serviceId" value="${esc(s.id)}" ${s.status === "running" ? "checked" : ""}> ${esc(s.name)} <span class="mono">:${s.ports[0] ?? "—"}</span></label>`).join("")
+    ? dev.map((s) => `<label class="check"><input type="checkbox" name="serviceId" value="${esc(s.id)}" ${p ? selected.has(s.id) : s.status === "running" ? "checked" : ""}> ${esc(s.name)} <span class="mono">:${s.ports[0] ?? "—"}</span></label>`).join("")
     : `<p class="empty-note">Pin a server first, then save it here.</p>`;
-  f.elements.urls.value = dev.filter((s) => s.status === "running" && s.ports[0]).map((s) => `http://127.0.0.1:${s.ports[0]}`).join("\n");
+  if (p) {
+    f.elements.name.value = p.name;
+    f.elements.urls.value = (p.urls ?? []).join("\n");
+    f.elements.worktree.value = p.worktree ?? "";
+    f.elements.openEditor.checked = !!p.openEditor;
+    $("#presetFormTitle").textContent = `Edit ${p.name}`;
+    $("#presetSubmit").textContent = "Save changes";
+  } else {
+    f.elements.urls.value = dev.filter((s) => s.status === "running" && s.ports[0]).map((s) => `http://127.0.0.1:${s.ports[0]}`).join("\n");
+    $("#presetFormTitle").textContent = "Save a preset";
+    $("#presetSubmit").textContent = "Save preset";
+  }
   $("#presetError").textContent = "";
   paintPresets();
   openSheet("sheet-preset");
+  editingPresetId = p ? p.id : null;
 }
 
 function paintPresets() {
@@ -692,6 +707,7 @@ function paintPresets() {
     <strong>${esc(p.name)}</strong>
     <span class="mono">${p.serviceIds.length} servers</span>
     <button type="button" data-act="preset-run">Resume</button>
+    <button type="button" data-act="preset-edit">Edit</button>
     <button type="button" data-act="preset-del" class="danger">Remove</button>
   </div>`).join("");
 }
@@ -1048,6 +1064,9 @@ document.addEventListener("click", async (ev) => {
         try { window.open(url, "_blank", "noopener"); } catch {}
       }
     }
+    else if (act === "preset-edit") {
+      openPresetForm(presets.find((x) => x.id === id));
+    }
     else if (act === "preset-del") {
       if (!confirm(`Remove preset ${holder?.dataset.id}?`)) return;
       await api("DELETE", `/api/presets/${encodeURIComponent(id)}`);
@@ -1177,14 +1196,17 @@ $("#presetForm").onsubmit = async (ev) => {
   const f = ev.target;
   const data = Object.fromEntries(new FormData(f));
   const serviceIds = [...f.querySelectorAll("input[name=serviceId]:checked")].map((el) => el.value);
+  const body = {
+    name: data.name,
+    serviceIds,
+    urls: data.urls,
+    worktree: data.worktree || undefined,
+    openEditor: f.elements.openEditor.checked,
+  };
   try {
-    await api("POST", "/api/presets", {
-      name: data.name,
-      serviceIds,
-      urls: data.urls,
-      worktree: data.worktree || undefined,
-      openEditor: f.elements.openEditor.checked,
-    });
+    if (editingPresetId) await api("PUT", `/api/presets/${encodeURIComponent(editingPresetId)}`, body);
+    else await api("POST", "/api/presets", body);
+    editingPresetId = null;
     f.reset();
     await refresh();
     openPresetForm();

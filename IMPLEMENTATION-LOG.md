@@ -33,7 +33,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-23 | Shareable pin template checked into a project | done | `devboard.json` at a project root. Import via + Add, worktree Import pins, Launch, and project Add from folder. Idempotent; never writes live status back. |
 | F-24 | Point the tray at the same board as the CLI, and read the version from package.json | done | Tray reads `DevboardURL` from Info.plist. `build-tray.sh` writes it from `DEVBOARD_URL`/`PORT` and the version from `package.json`. Rebuild required for a new URL. |
 | F-25 | Ask before restarting an unmanaged row with a lossy command | done | `commandLooksLossy` on rebuilt `ps` commands. Unpinned `POST /api/restart` by rootPid is 409 unless `confirm`. Page opens Edit; Save pins and restarts. |
-| F-26 | Allow editing a preset | todo | Tier 3 — waiting |
+| F-26 | Allow editing a preset | done | `PUT /api/presets/:id` keeps the id. Edit in the preset sheet; unknown id is 404. |
 | F-27 | Stop running `du` on every worktree and Attention scan | todo | Tier 3 — waiting |
 | F-28 | Grow the tray: per-service actions and notifications | todo | Tier 3. Human: tray first |
 | F-29 | Trace one request across several services' logs | todo | Tier 3 — waiting |

@@ -462,6 +462,17 @@ describe("healthUrl, ports, presets and attention", () => {
     expect((await call("DELETE", "/api/presets/frontend-only")).status).toBe(200);
   });
 
+  test("PUT /api/presets/:id edits in place and 404s for unknown ids", async () => {
+    await call("POST", "/api/presets", { name: "Stack", serviceIds: ["echo-2"], urls: [] });
+    const edited = await call("PUT", "/api/presets/stack", { name: "Full stack", serviceIds: ["echo-2", "web-3000"], urls: ["http://127.0.0.1:3000"] });
+    expect(edited.status).toBe(200);
+    expect((await edited.json()).preset).toMatchObject({ id: "stack", name: "Full stack", serviceIds: ["echo-2", "web-3000"] });
+    const listed = await (await call("GET", "/api/services")).json();
+    expect(listed.presets.find((p: { id: string }) => p.id === "stack").serviceIds).toEqual(["echo-2", "web-3000"]);
+    expect((await call("PUT", "/api/presets/missing", { name: "x", serviceIds: [] })).status).toBe(404);
+    await call("DELETE", "/api/presets/stack");
+  });
+
   test("POST /api/pinned keeps env overrides and restart-on-crash", async () => {
     running = [];
     const res = await call("POST", "/api/pinned", {

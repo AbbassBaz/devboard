@@ -603,6 +603,25 @@ export function createHandler(deps: Deps): BoardHandler {
       }
 
       const delPreset = /^\/api\/presets\/([^/]+)$/.exec(pathname);
+      if (method === "PUT" && delPreset) {
+        const body = await readBody(req);
+        if (typeof body.name !== "string" || !body.name.trim()) return fail("name required");
+        const serviceIds = Array.isArray(body.serviceIds) ? body.serviceIds.filter((id): id is string => typeof id === "string") : [];
+        const urls = Array.isArray(body.urls) ? body.urls.filter((u): u is string => typeof u === "string") : typeof body.urls === "string" ? body.urls.split("\n").map((u) => u.trim()).filter(Boolean) : [];
+        try {
+          const preset = await registry.replacePreset(decodeURIComponent(delPreset[1]), {
+            name: body.name,
+            projectId: typeof body.projectId === "string" ? body.projectId : undefined,
+            serviceIds,
+            urls,
+            worktree: typeof body.worktree === "string" ? body.worktree : undefined,
+            openEditor: body.openEditor === true,
+          });
+          return preset ? json({ preset }) : fail("no preset with that id", 404);
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
+      }
       if (method === "DELETE" && delPreset) {
         const removed = await registry.deletePreset(decodeURIComponent(delPreset[1]));
         return removed ? json({ ok: true }) : fail("no preset with that id", 404);

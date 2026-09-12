@@ -366,6 +366,19 @@ export class Registry {
     await this.enqueue(this.statePath, () => this.writeJson(this.statePath, list));
   }
 
+  /** Replace `id` in place. The id stays put so resume and delete keep working after a rename. */
+  async replacePreset(id: string, input: Omit<Preset, "id">): Promise<Preset | undefined> {
+    const name = input.name.trim();
+    if (!name) throw new Error("name required");
+    return this.enqueue(this.presetsPath, async () => {
+      const list = await this.loadPresets();
+      if (!list.some((p) => p.id === id)) return undefined;
+      const preset: Preset = { ...input, name, id, serviceIds: [...new Set(input.serviceIds)], urls: input.urls ?? [] };
+      await this.writeJson(this.presetsPath, list.map((p) => (p.id === id ? preset : p)));
+      return preset;
+    });
+  }
+
   async deletePreset(id: string): Promise<boolean> {
     return this.enqueue(this.presetsPath, async () => {
       const list = await this.loadPresets();

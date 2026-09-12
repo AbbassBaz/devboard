@@ -128,14 +128,14 @@
     <p class="lede">Frontend only, full stack, review branch — one click starts the same set and opens the URLs.</p>
     <div id="presets"></div>
     <form id="presetForm" autocomplete="off">
-      <h3 class="sub">Save a preset</h3>
+      <h3 class="sub" id="presetFormTitle">Save a preset</h3>
       <label>Name<input id="pr-name" name="name" placeholder="Full stack" required></label>
       <div class="field"><span class="lbl">Servers</span><div class="checks" id="pr-services"></div></div>
       <label>URLs <span class="opt">one per line</span><textarea class="mono" id="pr-urls" name="urls" placeholder="http://127.0.0.1:3000"></textarea></label>
       <label>Worktree<input id="pr-wt" name="worktree" placeholder="~/Projects/app-feat"></label>
       <label class="check"><input type="checkbox" id="pr-editor" name="openEditor"> Open the worktree in the editor</label>
       <div class="form-error" id="presetError"></div>
-      <div class="sheet-acts"><button class="primary" type="submit">Save preset</button><button type="button" class="ghost" data-act="close-sheet">Cancel</button></div>
+      <div class="sheet-acts"><button class="primary" type="submit" id="presetSubmit">Save preset</button><button type="button" class="ghost" data-act="close-sheet">Cancel</button></div>
     </form>
   </div>
 
