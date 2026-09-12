@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, symlinkSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { LogTail } from "../lib/types";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const base = (process.env.DEVBOARD_URL ?? "http://127.0.0.1:4242").replace(/\/$/, "");
@@ -43,7 +44,7 @@ function usage(code = 1): never {
   devboard start <id>      start a saved server
   devboard stop <id>       stop a running server
   devboard restart <id>    restart
-  devboard logs <id> [-f]  print the log; -f follows
+  devboard logs <id> [-f]  print the log; -f follows; --json prints the parsed entries
   devboard start-all       start every saved server that is off
   devboard stop-all        stop every running dev server
   devboard doctor          check bun, PATH tools, :4242, and the tray
@@ -230,9 +231,11 @@ try {
     let first = true;
     const once = async () => {
       const q = first ? "lines=200" : `from=${from}`;
-      const data = await api("GET", `/api/logs/${encodeURIComponent(id)}?${q}`) as { lines: string[]; size: number; next?: number; reset?: boolean };
+      const data = await api("GET", `/api/logs/${encodeURIComponent(id)}?${q}`) as LogTail;
       if (data.reset) console.log("--- log reset ---");
-      if (data.lines.length) console.log(data.lines.join("\n"));
+      if (data.entries.length) {
+        console.log(jsonOut ? JSON.stringify(data.entries, null, 2) : data.entries.map((e) => e.text).join("\n"));
+      }
       from = data.next ?? data.size;
       first = false;
     };

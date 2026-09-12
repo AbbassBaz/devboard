@@ -1,8 +1,8 @@
 # Implementation log
 
-Plan: `suggestions/final-plan.md`  
-Branch: `plan/tier-3` (Tier 2 merged to main as `a09ae07`)  
-Baseline: `bun test` — 133 pass, 0 fail (2026-09-11). After Tier 1: 144. No linter.
+Plan: `suggestions/logs-plan.md`  
+Branch: `plan/tier-4` (Tier 3 merged to main as `e474af8`)  
+Baseline: `bun test` — 133 pass, 0 fail (2026-09-11). After Tier 1: 144. After Tier 3: 190. Tier 4 baseline: 190 pass, 0 fail (2026-09-12); 227 after F-33. No linter.
 
 Precondition: landed uncommitted fonts, fixture scrub, project links, and worktree pin copying as `91f5dc7`.
 
@@ -37,6 +37,10 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-27 | Stop running `du` on every worktree and Attention scan | done | `diskMb` cached by `.git` mtime, 10 min TTL. Attention passes `disk: false`. Card shows `…` until size arrives. |
 | F-28 | Grow the tray: per-service actions and notifications | done | Per-row menu: Open, Restart, Stop, Copy run command, Logs (`?sel=`). One notification when `unhealthy` or `crash.gaveUp` flips. First poll is primed so existing alerts do not fire. |
 | F-29 | Trace one request across several services' logs | done | `findIds` + `GET /api/trace`. Clickable ids in the log pane open a Trace view grouped by service. JSON `requestId` and kin become the token. No time-window fallback. |
+| F-30 | Strip every terminal control sequence and resolve carriage returns | done | `cleanLine` runs CSI, OSC, and single-escape patterns, resolves `\r` to the last frame, then drops any remaining C0 byte except tab — that last sweep is beyond the plan text but is what makes the "no byte below 0x20" check true. Fixture holds real bytes. decision 1: recommendation used. Smoke could not run: the owner's board holds :4242, so it aborts with "abort: 4242 or 3999 already has a listener; refuse to drive a real board". |
+| F-31 | Parse each line once on the server into `LogEntry` | done | `parseLine` and its seven parts in `lib/logs.ts`, types in `lib/types.ts`, `entries` from `/api/logs/:id` and `/api/trace`, `ERROR_LINE` gone from Attention, ten identifiers deleted from `app.js`. A tagged level wins over the HTTP status, as the plan words it. `$ ` and `> ` lines are no longer dim — the page has no regex for them and `entry.marker` is the honest signal; design.md says so. decision 3: recommendation used. Smoke aborted as above. |
+| F-32 | Fetch the selected log incrementally and append to the DOM | done | `logs[id]` is `{entries, next, base}`; `?from=` every 1 s, append-only DOM, 10 000 cap with a front drop. Line keys are absolute so a trim never rebuilds: the first attempt rebuilt 10 000 lines (192 ms) every second at the cap and `↓ N new` never counted. Idle poll measured at 96 B with `curl` (no DevTools in this environment). decision 4: recommendation used. Smoke aborted as above. |
+| F-33 | Put the page's pure log logic in `public/log-view.js` and test it with `bun test` | done | Eight pure functions, 10 tests, `app.js` is a module. Two deviations: `server.ts` had to serve the new file (not in Touches; the page 404'd without it), and the "pure functions move" rule was applied to log-pane logic, not to sidebar or HTML helpers. Smoke aborted as above. |
 
 ## Tier 1 pause
 
@@ -50,6 +54,20 @@ All doable Tier 2 items are done (F-04, F-10, F-11, F-12, F-15, F-16, F-17, F-18
 
 Continue to Tier 3 only when you say go: F-21, F-22, F-23, F-24, F-25, F-26, F-27, F-28, F-29.
 
+## Tier 4 pause
+
+All four Tier 4 items are done: F-30, F-31, F-32, F-33. Nothing is blocked and nothing
+is waiting on you. Decisions 1, 3, and 4 were open, so the recommended option was used
+in each case and is named in the row above; to reverse one, the item that applies it is
+the only place to change. Decision 2 (badge gutter) belongs to F-34 and is still yours.
+
+`bash scripts/smoke.sh` could not run at any point: the real board holds :4242, so the
+script aborts by design with "abort: 4242 or 3999 already has a listener; refuse to
+drive a real board". Everything else was checked, including browser work on a throwaway
+board on :4342 with its own `DEVBOARD_HOME`.
+
+Continue to Tier 5 only when you say go: F-34, F-35, F-36, F-37, F-38, F-39, F-40.
+
 ## Noticed
 
 - `suggestions/` is untracked and not in `.gitignore`. Left untracked; not part of the product.
@@ -58,3 +76,6 @@ Continue to Tier 3 only when you say go: F-21, F-22, F-23, F-24, F-25, F-26, F-2
 - AGENTS.md test count was 133; suite is 144 after Tier 1. Updated in F-19.
 - No browser test harness (plan Gaps). F-02 was verified by hand on the live board.
 - Throwaway screenshot board used `PORT=4342` so it would not touch the real board.
+- Tier 4: `public/` cannot import `lib/`, so `log-view.js` and `lib/logs.ts` will hold two copies of `parseFilter` / `matches` when F-44 lands. The plan names this and asks for a shared fixture test.
+- Tier 4: the log window is the last 4 000 lines, so displayed line numbers start at 1 for whatever the window begins with, not at the file's own first line. They stay monotonic within a session, which is what F-32 asks for.
+- Tier 4: `app.js` is an ES module now, so its top-level bindings are not reachable by name from the devtools console. Debug through the DOM or export from `log-view.js`.

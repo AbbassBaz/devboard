@@ -141,15 +141,42 @@ export type PinTemplateEntry = {
   restartOnCrash?: boolean;
 };
 
-export type TraceHit = {
+export type LogLevel = "error" | "warn" | "info" | "debug" | "other";
+
+/** A devboard `=====` line: a run header, a rotation, or a clear. */
+export type LogMarker = { type: "start" | "rotated" | "cleared"; at: string; cwd?: string; command?: string };
+
+export type LogHttp = { method: string; path: string; status: number; ms?: number };
+
+/** One parsed log line. `parseLine` in `lib/logs.ts` is the only thing that builds these. */
+export type LogEntry = {
+  /** Index within the returned window; the page renumbers on append. */
   i: number;
-  line: string;
-  level: "error" | "warn" | "info" | "debug" | "other";
+  /** Every control sequence stripped and `\r` resolved. Never the raw bytes. */
+  text: string;
+  level: LogLevel;
+  /** Exactly as the process printed it. Never fabricated. */
+  time?: string;
+  /** Looks like a continuation of the line above: stack frame, indented dump, traceback body. */
+  cont?: true;
+  marker?: LogMarker;
+  /** "livekit.agents", "next", pino `name`. */
+  logger?: string;
+  /** The message part when the line splits into logger/msg/ctx, or when it is JSON. */
+  msg?: string;
+  /** Trailing JSON object text, or the JSON fields left after level/time/msg/logger. */
+  ctx?: string;
+  http?: LogHttp;
+  /** `findIds(text)`, present only when non-empty. */
+  ids?: string[];
 };
+
+/** The body of `GET /api/logs/:id`. */
+export type LogTail = { entries: LogEntry[]; path: string; size: number; next: number; reset?: boolean };
 
 export type TraceGroup = {
   id: string;
-  hits: TraceHit[];
+  hits: LogEntry[];
 };
 
 export type TraceResult = {

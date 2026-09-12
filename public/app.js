@@ -1,12 +1,10 @@
+import { entryBody, entryTid, errorIndexes, formatLogTime, lineKind, matchesEntry, visibleEntries } from "./log-view.js";
+
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const home = (p) => (p ? p.replace(/^\/Users\/[^/]+/, "~") : "");
 const nowClock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-
-const RE_MARK = /^===|^\$ |^> /;
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const LOG_TS = /^(\s*(?:\[[^\]]{6,32}\]|\d{4}-\d{2}-\d{2}[T ][\d:.Z+-]+|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*)/;
 
 let latest = [];
 let projects = [];
@@ -31,7 +29,9 @@ let restartAfterSave = null;
 let editingPresetId = null;
 let clock = nowClock();
 let toastTimer = 0;
-let lastLogSig = "";
+let logDirty = true;
+let logRendered = null;
+let newSinceFollow = 0;
 let trace = null;
 let jumpLine = null;
 
@@ -132,71 +132,10 @@ function openSheet(id) {
   $(`#${id}`).hidden = false;
 }
 
-function stripAnsi(s) { return String(s ?? "").replace(ANSI_RE, ""); }
-function lineKind(level, text) {
-  if (level === "error") return "err";
-  if (level === "warn") return "warn";
-  if (RE_MARK.test(stripAnsi(text))) return "mark";
-  if (level === "info") return "ok";
-  return "";
-}
-function isLogErr(entry) { return (typeof entry === "object" ? entry.level : null) === "error"; }
-function logText(entry) { return typeof entry === "string" ? entry : (entry?.text ?? ""); }
-function splitLogLine(raw) {
-  const text = stripAnsi(raw);
-  const m = LOG_TS.exec(text);
-  return m ? { time: m[1].trim(), body: text.slice(m[0].length) } : { time: "", body: text };
-}
-const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-const TRACEPARENT_RE = /\b[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}\b/gi;
-const REQ_ID_RE = /\breq[-_][a-z0-9][-a-z0-9]*/gi;
-const HEX_ID_RE = /\b[0-9a-f]{16,}\b/gi;
-const JSON_TRACE_KEYS = ["requestId", "reqId", "traceId", "trace_id", "correlationId", "x-request-id"];
-
-function jsonTraceIds(raw) {
-  const t = stripAnsi(raw).trim();
-  if (!(t.startsWith("{") && t.endsWith("}"))) return [];
-  try {
-    const v = JSON.parse(t);
-    if (!v || typeof v !== "object" || Array.isArray(v)) return [];
-    return JSON_TRACE_KEYS.map((k) => v[k]).filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
-  } catch { return []; }
-}
-
-function findIds(raw) {
-  const text = stripAnsi(raw);
-  const out = [];
-  const add = (s) => { if (s && !out.includes(s)) out.push(s); };
-  for (const id of jsonTraceIds(text)) add(id);
-  const take = (re) => {
-    const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
-    return [...text.matchAll(r)].map((m) => ({ value: m[0], start: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
-  };
-  const uuids = take(UUID_RE);
-  const tps = take(TRACEPARENT_RE);
-  for (const m of uuids) add(m.value);
-  for (const m of take(REQ_ID_RE)) add(m.value);
-  for (const m of tps) { add(m.value); add(m.value.split("-")[1] || ""); }
-  const covered = [...uuids, ...tps];
-  for (const m of take(HEX_ID_RE)) {
-    if (covered.some((c) => m.start >= c.start && m.end <= c.end)) continue;
-    add(m.value);
-  }
-  return out;
-}
-
-function clickableIds(raw) {
-  const json = jsonTraceIds(raw);
-  return findIds(raw).filter((t) =>
-    json.includes(t)
-    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t)
-    || /^req[-_]/i.test(t)
-    || /^[0-9a-f]{16,}$/i.test(t)
-  );
-}
-
-function linkIds(text) {
-  const ids = clickableIds(text).slice().sort((a, b) => b.length - a.length);
+function linkIds(text, all) {
+  // A composite token (a traceparent holds the trace id) is not worth tracing on its own: link the part.
+  const own = all ?? [];
+  const ids = own.filter((id) => !own.some((other) => other !== id && id.includes(other))).sort((a, b) => b.length - a.length);
   if (!ids.length) return esc(text);
   const spans = [];
   for (const id of ids) {
@@ -238,21 +177,21 @@ function defaultTraceIds() {
 function closeTrace() {
   if (!trace) return;
   trace = null;
-  lastLogSig = "";
+  markLogDirty();
   paintLog();
 }
 
 async function openTrace(token) {
   if (!token) return;
-  follow = false;
+  setFollow(false);
   trace = { token, groups: [], loading: true };
-  lastLogSig = "";
+  markLogDirty();
   paintLog();
   const ids = defaultTraceIds();
   if (!ids.length && selected()?.id) ids.push(selected().id);
   if (!ids.length) {
     trace = { token, groups: [], loading: false, error: "no services to search" };
-    lastLogSig = "";
+    markLogDirty();
     paintLog();
     return;
   }
@@ -263,37 +202,28 @@ async function openTrace(token) {
   } catch (e) {
     trace = { token, groups: [], loading: false, error: e.message };
   }
-  lastLogSig = "";
+  markLogDirty();
   paintLog();
 }
 
 async function jumpToHit(id, i) {
   trace = null;
-  follow = false;
+  setFollow(false);
   jumpLine = i;
   if (sel !== id) {
     saveSel(id);
     errCursor = null;
-    lastLogSig = "";
+    markLogDirty();
     paintList();
   } else {
-    lastLogSig = "";
+    markLogDirty();
   }
-  await fetchLog(id, 5000);
-  lastLogSig = "";
+  await fetchLog(id, { full: true, lines: 5000 });
+  markLogDirty();
   paintLog();
   document.getElementById(`log-${id}-${i}`)?.scrollIntoView({ block: "center" });
 }
 
-function formatLogTime(t) {
-  if (!t) return "";
-  const iso = Date.parse(t);
-  if (!Number.isNaN(iso) && /^\d{4}-\d{2}-\d{2}/.test(t)) {
-    return new Date(iso).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  }
-  const m = t.match(/(\d{2}:\d{2}:\d{2})/);
-  return m ? m[1] : t;
-}
 function errTotal() {
   return latest.filter((s) => s.kind === "dev" && !s.hidden).reduce((n, s) => n + (s.errorCount ?? 0), 0);
 }
@@ -359,7 +289,10 @@ function optimisticStartLines(s) {
 }
 
 function appendStartLines(s) {
-  logs[s.id] = [...(logs[s.id] || []), ...optimisticStartLines(s).map((text) => ({ text, level: "other" }))];
+  const buf = logs[s.id] ?? (logs[s.id] = { entries: [], next: null, base: 0 });
+  const added = optimisticStartLines(s).map((text, k) => ({ i: buf.entries.length + k, text, level: "other" }));
+  buf.entries.push(...added);
+  buf.next = null; // the next poll reloads, so the real start marker replaces these two
 }
 
 async function loadSuggest(dir, boxId, cmdId, portId) {
@@ -546,24 +479,43 @@ function paintLogHead() {
   $("#logMenuBtn")?.addEventListener("click", (ev) => setMenu("log", ev));
 }
 
-function shownLogs(s) {
-  const raw = (s && logs[s.id]) || [];
-  const q = logFilter.trim().toLowerCase();
-  return raw.map((entry, i) => ({ raw: logText(entry), i, text: stripAnsi(logText(entry)), level: entry.level }))
-    .filter((l) => (!q || l.text.toLowerCase().includes(q)) && (!errOnly || l.level === "error"));
+/** The buffer for one log: entries, the byte cursor, and how many lines were dropped off the front. */
+function logBuf(id) {
+  return (id && logs[id]) || null;
+}
+function entriesOf(id) {
+  return logBuf(id)?.entries ?? [];
+}
+function baseOf(id) {
+  return logBuf(id)?.base ?? 0;
+}
+function markLogDirty() { logDirty = true; }
+function setFollow(on) {
+  if (follow === on) return;
+  follow = on;
+  newSinceFollow = 0;
+}
+
+/** What `visibleEntries`, `matchesEntry`, and the level chips read. */
+function viewState() {
+  return { filter: logFilter, errOnly };
+}
+function shownEntries(s) {
+  return visibleEntries(entriesOf(s?.id), viewState());
 }
 
 function paintLogTools(s) {
-  const raw = (s && logs[s.id]) || [];
-  const errIdx = raw.map((l, i) => (isLogErr(l) ? i : -1)).filter((i) => i >= 0);
-  const shown = shownLogs(s);
+  const raw = entriesOf(s?.id);
+  const errIdx = errorIndexes(raw, baseOf(s?.id));
+  const shown = shownEntries(s);
   const chip = $("#errChip");
+  const followBtn = $("#followBtn");
   const tracing = !!trace;
   $("#logFilter").hidden = tracing;
   $("#traceClose").hidden = !tracing;
   if (tracing) {
     chip.hidden = true;
-    $("#followBtn").hidden = true;
+    followBtn.hidden = true;
     const n = (trace.groups || []).reduce((sum, g) => sum + g.hits.length, 0);
     $("#logCount").textContent = trace.loading ? "tracing…" : `${n} hit${n === 1 ? "" : "s"}`;
     $("#logCount").title = trace.token;
@@ -579,7 +531,8 @@ function paintLogTools(s) {
         : `error ${errIdx.indexOf(errCursor) + 1}/${errIdx.length} ↓`;
     chip.innerHTML = `<span class="d"></span>${esc(label)}`;
   }
-  $("#followBtn").hidden = follow;
+  followBtn.hidden = follow;
+  followBtn.textContent = newSinceFollow ? `↓ ${newSinceFollow} new` : (followBtn.dataset.label || "↓ Resume follow");
   const filtered = !!(logFilter.trim() || errOnly);
   $("#logCount").textContent = s ? (filtered ? `${shown.length}/${raw.length} lines` : `${raw.length} lines`) : "";
   $("#logCount").title = s ? `~/.devboard/logs/${s.id}.log` : "";
@@ -606,14 +559,11 @@ function paintTraceBody() {
   ).join("");
   const blocks = groups.map((g) => {
     const hits = g.hits.map((h) => {
-      const { time, body: rest } = splitLogLine(h.line);
-      const kind = lineKind(h.level, h.line);
-      const t = formatLogTime(time);
-      const display = rest || stripAnsi(h.line);
-      return `<div class="log-line ${kind}" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${h.i}" title="Open this log at this line">
+      const t = formatLogTime(h.time);
+      return `<div class="log-line ${lineKind(h)}" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${h.i}" title="Open this log at this line">
       <span class="ln">${h.i + 1}</span>
       ${t ? `<span class="t">${esc(t)}</span>` : ""}
-      <span>${linkIds(display)}</span>
+      <span>${linkIds(entryBody(h), h.ids)}</span>
     </div>`;
     }).join("");
     return `<div class="trace-group"><div class="trace-svc">${esc(nameOf(g.id))}</div>${hits}</div>`;
@@ -621,30 +571,44 @@ function paintTraceBody() {
   body.innerHTML = `<div class="trace"><div class="trace-head"><span class="trace-tok">${esc(trace.token)}</span>${chips}</div>${blocks}</div>`;
 }
 
-function paintLogBody(s) {
+/** A log has a time column when any entry in the buffer printed one. */
+function showTimeFor(id) {
+  return entriesOf(id).some((e) => formatLogTime(e.time));
+}
+
+function caretHtml(s) {
+  return rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "";
+}
+
+function logLineHtml(s, e, showTime) {
+  const t = formatLogTime(e.time);
+  const tid = entryTid(e);
+  const key = baseOf(s.id) + e.i;
+  return `<div class="log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}" data-i="${key}" id="log-${esc(s.id)}-${key}" title="Click to copy line">
+      <span class="ln">${key + 1}</span>
+      ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
+      ${tid ? `<span class="log-tid" title="request id">${esc(tid)}</span>` : ""}
+      <span>${linkIds(entryBody(e), e.ids)}</span>
+    </div>`;
+}
+
+/** Full repaint. Runs only when view state changes: selection, filter, level, follow, status. */
+function rebuildBody(s) {
   const body = $("#logBody");
   if (trace) {
-    const sig = ["trace", trace.token, trace.loading, trace.error || "", (trace.groups || []).length].join("|");
-    if (sig === lastLogSig) return;
-    lastLogSig = sig;
     paintTraceBody();
+    logRendered = { id: s?.id ?? null, mode: "trace" };
     return;
   }
   if (!s) {
     body.innerHTML = `<div class="empty">Select a server to read its output.</div>`;
-    lastLogSig = "";
+    logRendered = { id: null, mode: "empty" };
     return;
   }
-  const raw = logs[s.id] || [];
-  const shown = shownLogs(s);
+  const raw = entriesOf(s.id);
+  const shown = shownEntries(s);
   const unmanaged = s.status === "running" && !s.hasLog && !raw.length;
   const filteredEmpty = raw.length && !shown.length;
-  const sig = [s.id, raw.length, logText(raw.at(-1) ?? ""), logFilter, errOnly, errCursor, jumpLine, s.status, rowState(s), follow].join("|");
-  if (sig === lastLogSig) {
-    if (follow) body.scrollTop = body.scrollHeight;
-    return;
-  }
-  lastLogSig = sig;
 
   if (!shown.length) {
     let text = "Nothing matches the current filter.";
@@ -656,35 +620,63 @@ function paintLogBody(s) {
       text = `${s.name} is stopped. Start it and its output lands here.`;
       startBtn = `<button type="button" class="go" data-act="toggle">Start ${esc(s.name)}</button>`;
     } else {
-      body.innerHTML = rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "";
+      body.innerHTML = caretHtml(s);
+      logRendered = { id: s.id, mode: "caret" };
       if (follow) body.scrollTop = body.scrollHeight;
       return;
     }
     body.innerHTML = `<div class="empty"><span>${esc(text)}</span>${startBtn}</div>`;
+    logRendered = { id: s.id, mode: "empty" };
     return;
   }
 
-  const times = shown.map((l) => formatLogTime(splitLogLine(l.raw).time));
-  const showTime = times.some(Boolean);
-  body.innerHTML = shown.map((l) => {
-    const { time, body: rest } = splitLogLine(l.raw);
-    const kind = lineKind(l.level, l.text);
-    const t = formatLogTime(time);
-    const display = (rest || l.text) || l.text;
-    const tid = jsonTraceIds(l.raw)[0];
-    return `<div class="log-line ${kind}${errCursor === l.i || jumpLine === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
-      <span class="ln">${l.i + 1}</span>
-      ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
-      ${tid ? `<span class="log-tid" title="request id">${esc(tid)}</span>` : ""}
-      <span>${linkIds(display)}</span>
-    </div>`;
-  }).join("") + (rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "");
-
+  const showTime = showTimeFor(s.id);
+  body.innerHTML = shown.map((e) => logLineHtml(s, e, showTime)).join("") + caretHtml(s);
+  logRendered = { id: s.id, mode: "lines", showTime };
   if (follow) body.scrollTop = body.scrollHeight;
 }
 
+/** Append path: new entries become nodes at the tail, no rebuild. */
+function appendToLog(s, added, base) {
+  const body = $("#logBody");
+  const showTime = showTimeFor(s.id);
+  if (trace || logDirty || logRendered?.id !== s.id || logRendered.mode !== "lines" || logRendered.showTime !== showTime) {
+    markLogDirty();
+    paintLogBody(s);
+    return;
+  }
+  const visible = added.filter((e) => matchesEntry(e, viewState()));
+  if (visible.length) {
+    const html = visible.map((e) => logLineHtml(s, e, showTime)).join("");
+    const caret = body.querySelector(".caret");
+    if (caret) caret.insertAdjacentHTML("beforebegin", html);
+    else body.insertAdjacentHTML("beforeend", html);
+    if (!follow) newSinceFollow += visible.length;
+  }
+  if (base) dropLeadingLines(body, base);
+  const caret = body.querySelector(".caret");
+  if (rowState(s) === "on" && !caret) body.insertAdjacentHTML("beforeend", caretHtml(s));
+  else if (rowState(s) !== "on" && caret) caret.remove();
+  if (follow) body.scrollTop = body.scrollHeight;
+}
+
+function paintLogBody(s) {
+  if (!logDirty) {
+    if (follow) { const b = $("#logBody"); b.scrollTop = b.scrollHeight; }
+    return;
+  }
+  logDirty = false;
+  rebuildBody(s);
+}
+
+let logStateSig = "";
 function paintLog() {
   const s = selected();
+  const sig = s ? [s.id, s.status, rowState(s), s.hasLog, !!trace, trace?.loading, (trace?.groups ?? []).length].join("|") : "none";
+  if (sig !== logStateSig) {
+    logStateSig = sig;
+    markLogDirty();
+  }
   paintLogHead();
   paintLogTools(s);
   paintLogBody(s);
@@ -705,7 +697,7 @@ function select(id) {
   errCursor = null;
   jumpLine = null;
   if (trace) { trace = null; }
-  lastLogSig = "";
+  markLogDirty();
   paintList();
   paintLog();
   if (follow) $("#logBody").scrollTop = $("#logBody").scrollHeight;
@@ -715,14 +707,13 @@ function select(id) {
 function nextErr() {
   const s = selected();
   if (!s) return;
-  const raw = logs[s.id] || [];
-  const idx = raw.map((l, i) => (isLogErr(l) ? i : -1)).filter((i) => i >= 0);
+  const idx = errorIndexes(entriesOf(s.id), baseOf(s.id));
   if (!idx.length) return;
   const cur = errCursor == null ? -1 : errCursor;
   const next = idx.find((i) => i > cur) ?? idx[0];
   errCursor = next;
-  follow = false;
-  lastLogSig = "";
+  setFollow(false);
+  markLogDirty();
   paintLog();
   const c = $("#logBody");
   const el = document.getElementById(`log-${s.id}-${next}`);
@@ -750,7 +741,7 @@ async function toggle(s) {
     } else {
       setBusy(s.id, "starting");
       appendStartLines(s);
-      lastLogSig = "";
+      markLogDirty();
       render();
       await api("POST", "/api/start", { id: s.id });
     }
@@ -766,7 +757,7 @@ async function restart(s) {
   if (!s || busy[s.id]) return;
   setBusy(s.id, "starting");
   appendStartLines(s);
-  lastLogSig = "";
+  markLogDirty();
   render();
   try {
     await api("POST", "/api/restart", s.rootPid ? { rootPid: s.rootPid } : { id: s.id });
@@ -792,7 +783,7 @@ async function switchAll(on) {
     setBusy(s.id, on ? "starting" : "stopping");
     if (on) appendStartLines(s);
   }
-  lastLogSig = "";
+  markLogDirty();
   render();
   for (const s of targets) {
     try {
@@ -1013,19 +1004,70 @@ async function loadAttention() {
   }
 }
 
-async function fetchLog(id, n = 4000) {
+const LOG_WINDOW = 4000;      // lines on a full load
+const LOG_MAX_ENTRIES = 10000; // buffer cap; older entries drop off the front and `base` rises
+
+/** Drop the oldest entries past the cap, raise `base`, and renumber. Returns how many went. */
+function trimBuffer(buf) {
+  const over = buf.entries.length - LOG_MAX_ENTRIES;
+  if (over <= 0) return 0;
+  buf.entries.splice(0, over);
+  buf.base += over;
+  for (let k = 0; k < buf.entries.length; k++) buf.entries[k].i = k;
+  return over;
+}
+
+/** Drop the rendered lines that fell out of the buffer, keeping the reading position. */
+function dropLeadingLines(body, base) {
+  const top = body.scrollTop;
+  const height = body.scrollHeight;
+  let node = body.firstElementChild;
+  while (node && node.classList.contains("log-line") && Number(node.dataset.i) < base) {
+    const next = node.nextElementSibling;
+    node.remove();
+    node = next;
+  }
+  const removed = height - body.scrollHeight;
+  // Absolute, not relative: the browser may have anchored the scroll itself, and
+  // subtracting the removed height a second time would slide the view backwards.
+  if (removed > 0 && !follow) body.scrollTop = Math.max(0, top - removed);
+}
+
+/**
+ * One poll of the selected log. Full window on first load, after a reset, or when asked;
+ * otherwise `?from=<byte cursor>`, which is a few hundred bytes while the process is idle.
+ */
+async function fetchLog(id, opts = {}) {
   if (!id) return;
   const s = latest.find((x) => x.id === id);
   if (!s?.hasLog) return;
+  const buf = logBuf(id);
+  const full = opts.full || !buf || buf.next == null;
   try {
-    const { lines, levels } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=${n}`);
-    logs[id] = (lines || []).map((text, i) => ({ text, level: levels?.[i] || "other" }));
-    if (id === sel) {
-      if (trace) return;
-      lastLogSig = "";
-      paintLog();
+    const q = full ? `lines=${opts.lines ?? LOG_WINDOW}` : `from=${buf.next}`;
+    const data = await api("GET", `/api/logs/${encodeURIComponent(id)}?${q}`);
+    if (!full && data.reset) {
+      await fetchLog(id, { full: true });
+      return;
     }
-    else { paintChrome(); paintList(); }
+    const incoming = data.entries || [];
+    if (full) {
+      logs[id] = { entries: incoming.map((e, k) => ({ ...e, i: k })), next: data.next ?? data.size ?? 0, base: 0 };
+      if (id !== sel) { paintChrome(); paintList(); return; }
+      markLogDirty();
+      paintLog();
+      return;
+    }
+    const cur = logBuf(id);
+    cur.next = data.next ?? cur.next;
+    if (!incoming.length) return;
+    const added = incoming.map((e, k) => ({ ...e, i: cur.entries.length + k }));
+    cur.entries.push(...added);
+    trimBuffer(cur);
+    if (id !== sel) { paintChrome(); paintList(); return; }
+    if (trace) return;
+    appendToLog(s, added, cur.base);
+    paintLogTools(s);
   } catch {}
 }
 
@@ -1036,7 +1078,6 @@ async function refresh() {
     projects = data.projects ?? [];
     presets = data.presets ?? [];
     render();
-    if (sel) fetchLog(sel);
   } catch {
     $("#counts").innerHTML = `<span class="err">server unreachable</span>`;
   }
@@ -1053,8 +1094,8 @@ document.addEventListener("click", async (ev) => {
   const line = ev.target.closest(".log-line");
   if (line && !ev.target.closest("button") && line.dataset.act !== "trace-jump") {
     const s = selected();
-    const rec = logText((logs[s?.id] || [])[Number(line.dataset.i)]);
-    if (rec) copy(stripAnsi(rec).replace(LOG_TS, "").trim() || stripAnsi(rec));
+    const rec = entriesOf(s?.id)[Number(line.dataset.i) - baseOf(s?.id)];
+    if (rec) copy(entryBody(rec) || rec.text);
     return;
   }
 
@@ -1097,10 +1138,10 @@ document.addEventListener("click", async (ev) => {
     if (p) window.open(`http://localhost:${p}`, "_blank", "noopener");
     return;
   }
-  if (act === "toggle-err-only") { closeMenu(); errOnly = !errOnly; lastLogSig = ""; paintLog(); return; }
+  if (act === "toggle-err-only") { closeMenu(); errOnly = !errOnly; markLogDirty(); paintLog(); return; }
   if (act === "toggle-follow") {
     closeMenu();
-    follow = !follow;
+    setFollow(!follow);
     if (follow) $("#logBody").scrollTop = $("#logBody").scrollHeight;
     paintLog();
     return;
@@ -1147,8 +1188,8 @@ document.addEventListener("click", async (ev) => {
       if (!s.hasLog) return;
       if (!confirm(`Clear the log file for ${s.name}? This truncates ~/.devboard/logs/${s.id}.log.`)) return;
       await api("DELETE", `/api/logs/${encodeURIComponent(s.id)}`);
-      logs[s.id] = [];
-      lastLogSig = "";
+      logs[s.id] = { entries: [], next: null, base: 0 }; // the next poll reloads and shows the cleared marker
+      markLogDirty();
     }
     else if (act === "wt-prune") {
       await api("POST", "/api/worktrees/prune", { dir: btn.dataset.dir || $("#wt-dir").value });
@@ -1240,7 +1281,7 @@ document.addEventListener("click", async (ev) => {
         const m = latest.find((x) => x.id === mid);
         if (m?.status === "stopped") { setBusy(mid, "starting"); appendStartLines(m); }
       }
-      lastLogSig = "";
+      markLogDirty();
       render();
       const result = await api("POST", `/api/projects/${encodeURIComponent(projectId)}/start`);
       for (const err of result.errors ?? []) toast(`${err.id}: ${err.error}`);
@@ -1274,7 +1315,7 @@ document.addEventListener("click", async (ev) => {
         const m = latest.find((x) => x.id === mid);
         if (m?.status === "stopped") { setBusy(mid, "starting"); appendStartLines(m); }
       }
-      lastLogSig = "";
+      markLogDirty();
       for (const url of result.urls ?? []) {
         try { window.open(url, "_blank", "noopener"); } catch {}
       }
@@ -1301,21 +1342,21 @@ $("#moreBtn").onclick = (ev) => setMenu("top", ev);
 $("#addBtn").onclick = () => { closeMenu(); toggleAdd(); };
 $("#addCancel").onclick = () => { addOpen = false; $("#addForm").hidden = true; };
 $("#q").oninput = (ev) => { query = ev.target.value; paintList(); };
-$("#logFilter").oninput = (ev) => { logFilter = ev.target.value; lastLogSig = ""; paintLog(); };
+$("#logFilter").oninput = (ev) => { logFilter = ev.target.value; markLogDirty(); paintLog(); };
 $("#errChip").onclick = (ev) => {
-  if (ev.shiftKey) { errOnly = !errOnly; lastLogSig = ""; paintLog(); }
+  if (ev.shiftKey) { errOnly = !errOnly; markLogDirty(); paintLog(); }
   else nextErr();
 };
 $("#followBtn").onclick = () => {
-  follow = true;
+  setFollow(true);
   $("#logBody").scrollTop = $("#logBody").scrollHeight;
   paintLog();
 };
 $("#logBody").addEventListener("scroll", () => {
   const b = $("#logBody");
   const atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 8;
-  if (!atBottom && follow) { follow = false; paintLogTools(selected()); }
-  else if (atBottom && !follow) { follow = true; paintLogTools(selected()); }
+  if (!atBottom && follow) { setFollow(false); paintLogTools(selected()); }
+  else if (atBottom && !follow) { setFollow(true); paintLogTools(selected()); }
 });
 $("#overlay").addEventListener("click", (ev) => { if (ev.target === $("#overlay")) closeSheet(); });
 
@@ -1478,4 +1519,4 @@ paintChrome();
 refresh();
 setInterval(paintClock, 1000);
 setInterval(refresh, 3000);
-setInterval(() => { if (sel) fetchLog(sel); }, 2000);
+setInterval(() => { if (sel) fetchLog(sel); }, 1000); // decision 4: 1s, matching `devboard logs -f`

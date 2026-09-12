@@ -7,14 +7,14 @@ import { Control, isValidLogId, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
 import { maskEnv, parseEnvText, readProcessEnv as readLiveEnv } from "./lib/env";
 import { applyReadiness, firstFreePort } from "./lib/health";
-import { classifyLine, countErrors } from "./lib/logs";
+import { countErrors, parseLine } from "./lib/logs";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
 import { parseLinks, projectViews, servicesInFolder } from "./lib/projects";
 import { Registry } from "./lib/registry";
 import { CrashWatch } from "./lib/restarts";
 import { suggestCommands } from "./lib/suggest";
 import { parsePinTemplate, planImport, readTemplateFile } from "./lib/template";
-import type { Pinned, ProjectLink, RunningService, Service, StartSpec, WorktreeInfo } from "./lib/types";
+import type { LogEntry, Pinned, ProjectLink, RunningService, Service, StartSpec, WorktreeInfo } from "./lib/types";
 import { blockingWorktreeServices, createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
@@ -142,10 +142,11 @@ export function createHandler(deps: Deps): BoardHandler {
   };
   const withErrorCounts = async (services: Service[]) =>
     Promise.all(services.map(async (s) => (s.id && s.hasLog ? { ...s, errorCount: await errorCountFor(s.id) } : s)));
-  const withLevels = <T extends { lines: string[] }>(tail: T) => ({
-    ...tail,
-    levels: tail.lines.map(classifyLine),
-  });
+  /** One parse per line on the server: the page, the CLI, Trace, and smoke all read `entries`. */
+  const withEntries = <T extends { lines: string[] }>(tail: T) => {
+    const { lines, ...rest } = tail;
+    return { ...rest, entries: lines.map(parseLine) };
+  };
 
   const folderMembers = async (folder: string): Promise<string[]> => {
     const { running, services } = await snapshot();
@@ -245,7 +246,7 @@ export function createHandler(deps: Deps): BoardHandler {
       if (method === "GET" && pathname === "/") {
         return new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
       }
-      if (method === "GET" && (pathname === "/app.css" || pathname === "/app.js")) {
+      if (method === "GET" && (pathname === "/app.css" || pathname === "/app.js" || pathname === "/log-view.js")) {
         const file = Bun.file(new URL(`./public${pathname}`, import.meta.url));
         if (!(await file.exists())) return fail("not found", 404);
         return new Response(file, {
@@ -704,10 +705,10 @@ export function createHandler(deps: Deps): BoardHandler {
         for (const id of ids.slice(0, 50)) {
           if (!isValidLogId(id) || !control.hasLog(id)) continue;
           const { lines } = await control.tailLog(id, 5000);
-          const hits = [];
+          const hits: LogEntry[] = [];
           for (let i = 0; i < lines.length; i++) {
             if (!lines[i].includes(token)) continue;
-            hits.push({ i, line: lines[i], level: classifyLine(lines[i]) });
+            hits.push(parseLine(lines[i], i));
           }
           if (hits.length) groups.push({ id, hits });
         }
@@ -723,11 +724,11 @@ export function createHandler(deps: Deps): BoardHandler {
         if (fromRaw != null) {
           const from = Number(fromRaw);
           if (!Number.isFinite(from) || from < 0) return fail("from must be a byte offset");
-          return json(withLevels(await control.tailLog(id, 200, from)));
+          return json(withEntries(await control.tailLog(id, 200, from)));
         }
         const requested = Number(url.searchParams.get("lines") ?? 200);
         const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 5000) : 200;
-        return json(withLevels(await control.tailLog(id, lines)));
+        return json(withEntries(await control.tailLog(id, lines)));
       }
       if (method === "DELETE" && logs) {
         const id = decodeURIComponent(logs[1]);

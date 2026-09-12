@@ -1,0 +1,8 @@
+===== 2026-09-12T04:00:00.000Z start in /tmp/web: pnpm dev =====
+[?25l▲ Next.js 16.3.1 (Turbopack)
+- Local:         http://localhost:3010
+[32m✓[0m Ready in 164ms[?25h
+ GET / 200 in 366ms (next.js: 126ms, application-code: 240ms)
+ GET /api/x 500 in 34ms
+ GET /api/missing 404 in 8ms
+ POST /api/orders 201 in 1234ms

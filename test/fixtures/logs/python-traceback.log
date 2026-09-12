@@ -1,0 +1,8 @@
+2026-09-12 04:41:30,021 - [31mERROR[0m livekit.agents - error initializing process [90m{"pid": 72519}[0m
+Traceback (most recent call last):
+  File "/tmp/agent/.venv/lib/python3.12/site-packages/livekit/agents/ipc/supervised_proc.py", line 154, in initialize
+    await asyncio.wait_for(self._initialize_fut, timeout=self._opts.initialize_timeout)
+  File "/usr/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+asyncio.exceptions.CancelledError
