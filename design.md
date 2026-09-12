@@ -111,7 +111,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 **B** (30px, mono 11 dim, border `#22262c`): click-to-copy `cwd` and `$ command` (glyph `#4a5160`, hover `#d7dae0`); `pid · cpu · MB · up` when running.
 
-**Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`): log filter (26px, flex 1, min 120). Error chip only if the log has errors — click cycles next error, ⇧click toggles errors-only (`1 error ↓` → `error 1/3 ↓` → `errors only · 3`). `↓ Resume follow` (accent outline) only when follow is off. Right: `N lines` or `k/N lines`, `title` = log path. While Trace is open the filter, error chip, and follow hide; **Close trace** and `N hits` take their place.
+**Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`): log filter (26px, flex 1, min 120). Error chip only if the log has errors — click cycles next error, ⇧click toggles errors-only (`1 error ↓` → `error 1/3 ↓` → `errors only · 3`). `↓ Resume follow` (accent outline) only when follow is off; while follow is off it reads `↓ N new` for the lines that have arrived since, and the count resets when follow resumes. Right: `N lines` or `k/N lines`, `title` = log path. While Trace is open the filter, error chip, and follow hide; **Close trace** and `N hits` take their place.
 
 **Body** (`10px 16px 20px`, mono 12 / 1.6, `#c3c8d1`):
 - Every line is cleaned before it is rendered: CSI, OSC, and single-character escape sequences removed and a `\r` progress bar resolved to its last frame (`cleanLine` in `lib/logs.ts`). No raw control byte — `[?25h` and friends — ever reaches the pane, and a download bar shows one line, not every frame.
@@ -138,7 +138,7 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 - `Space` toggles the selected server. `r` restarts if running. Restarting an unpinned row whose command still has quotes or shell metacharacters (rebuilt from `ps`) returns 409 and opens Edit so you can check quoting; Save pins and restarts. `e` next error. `c` copies `cd <cwd> && <command>`. `o` opens `http://localhost:<port>`.
 - Busy is optimistic: switch, dot, and primary go amber until `/api/services` agrees (or 15s). On start, append `=== devboard start · <cmd>` and `$ <cmd>` immediately.
 - Follow is on by default. Next-error turns it off. Resume follow turns it on and jumps to the tail. Scrolling away from the tail also turns it off.
-- Poll `/api/services` every 3s; selected log `/api/logs/:id?lines=4000` every 2s.
+- Poll `/api/services` every 3s. The selected log loads `?lines=4000` once, then polls `?from=<byte cursor>` every 1s and appends only what arrived — an idle poll is a few hundred bytes and nothing already on screen is re-rendered. A full repaint happens only when view state changes (selection, filter, errors-only, status). The page keeps at most 10 000 entries: older ones drop off the front and the line numbers keep counting up. `reset` (the log was cleared or rotated) reloads the window.
 - Copy via `navigator.clipboard.writeText`, then the status-bar toast.
 - One open menu. Outside click or item click closes it.
 - Destructive actions (stop all, project stop, kill system, remove, clear log) still confirm.
