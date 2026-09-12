@@ -131,7 +131,7 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 ## Behaviour
 
-- Select by row click or `↑↓` / `j`/`k` through **visible** (filtered) rows. Changing selection resets the error cursor and, if follow is on, scrolls the log to the tail. Persist `sel` in `localStorage`.
+- Select by row click or `↑↓` / `j`/`k` through **visible** (filtered) rows. Changing selection resets the error cursor and, if follow is on, scrolls the log to the tail. Persist `sel` in `localStorage`. `?sel=<id>` (tray Logs) selects that row on load and writes the same key.
 - `Space` toggles the selected server. `r` restarts if running. Restarting an unpinned row whose command still has quotes or shell metacharacters (rebuilt from `ps`) returns 409 and opens Edit so you can check quoting; Save pins and restarts. `e` next error. `c` copies `cd <cwd> && <command>`. `o` opens `http://localhost:<port>`.
 - Busy is optimistic: switch, dot, and primary go amber until `/api/services` agrees (or 15s). On start, append `=== devboard start · <cmd>` and `$ <cmd>` immediately.
 - Follow is on by default. Next-error turns it off. Resume follow turns it on and jumps to the tail. Scrolling away from the tail also turns it off.

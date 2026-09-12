@@ -3,6 +3,11 @@ import Foundation
 import Observation
 import ServiceManagement
 import SwiftUI
+import UserNotifications
+
+struct CrashInfo: Decodable {
+  var gaveUp: Bool?
+}
 
 struct Service: Decodable {
   var id: String?
@@ -14,6 +19,9 @@ struct Service: Decodable {
   var readiness: String?
   var hidden: Bool?
   var pinned: Bool?
+  var cwd: String?
+  var command: String?
+  var crash: CrashInfo?
 
   var rowId: String { id ?? "\(name)-\(ports.first ?? 0)" }
 }
@@ -40,6 +48,9 @@ enum BoardConfig {
 final class BoardClient {
   private(set) var services: [Service] = []
   private(set) var reachable = false
+  private var primedAlerts = false
+  private var seenUnhealthy = Set<String>()
+  private var seenGaveUp = Set<String>()
 
   var dev: [Service] {
     services.filter { $0.kind == "dev" && $0.hidden != true }
@@ -50,6 +61,7 @@ final class BoardClient {
   var unhealthy: Int { dev.filter { $0.readiness == "unhealthy" }.count }
 
   init() {
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     Task { await self.loop() }
   }
 
@@ -70,6 +82,7 @@ final class BoardClient {
       }
       services = try JSONDecoder().decode(Snapshot.self, from: data).services
       reachable = true
+      notifyFlips()
     } catch {
       reachable = false
     }
@@ -78,6 +91,14 @@ final class BoardClient {
   func start(_ service: Service) async {
     guard let id = service.id else { return }
     await post("/api/start", ["id": id])
+  }
+
+  func restart(_ service: Service) async {
+    if let id = service.id {
+      await post("/api/restart", ["id": id])
+    } else if let pid = service.rootPid {
+      await post("/api/restart", ["rootPid": pid])
+    }
   }
 
   func stop(_ service: Service) async {
@@ -105,6 +126,44 @@ final class BoardClient {
     req.httpBody = try? JSONSerialization.data(withJSONObject: body)
     _ = try? await URLSession.shared.data(for: req)
     await refresh()
+  }
+
+  private func notifyFlips() {
+    if !primedAlerts {
+      for s in dev {
+        if s.readiness == "unhealthy" { seenUnhealthy.insert(s.rowId) }
+        if s.crash?.gaveUp == true { seenGaveUp.insert(s.rowId) }
+      }
+      primedAlerts = true
+      return
+    }
+    for s in dev {
+      let key = s.rowId
+      if s.readiness == "unhealthy" {
+        if !seenUnhealthy.contains(key) {
+          seenUnhealthy.insert(key)
+          postNote(title: s.name, body: "unhealthy")
+        }
+      } else {
+        seenUnhealthy.remove(key)
+      }
+      if s.crash?.gaveUp == true {
+        if !seenGaveUp.contains(key) {
+          seenGaveUp.insert(key)
+          postNote(title: s.name, body: "restart failed")
+        }
+      } else {
+        seenGaveUp.remove(key)
+      }
+    }
+  }
+
+  private func postNote(title: String, body: String) {
+    let content = UNMutableNotificationContent()
+    content.title = title
+    content.body = body
+    let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+    UNUserNotificationCenter.current().add(req)
   }
 }
 
@@ -162,8 +221,15 @@ struct TrayMenu: View {
         .foregroundStyle(board.unhealthy > 0 ? .red : .secondary)
       Divider()
       ForEach(board.dev.prefix(12), id: \.rowId) { service in
-        Button(rowTitle(service)) {
-          Task { await activate(service) }
+        Menu(rowTitle(service)) {
+          Button("Open") { openPort(service) }
+            .disabled(service.ports.first == nil)
+          Button("Restart") { Task { await board.restart(service) } }
+          Button("Stop") { Task { await board.stop(service) } }
+            .disabled(service.status != "running")
+          Button("Copy run command") { copyRun(service) }
+          Button("Logs") { openLogs(service) }
+            .disabled(service.id == nil)
         }
       }
       if board.dev.count > 12 {
@@ -203,12 +269,21 @@ struct TrayMenu: View {
     return "\(mark)  \(s.name)  \(port)"
   }
 
-  private func activate(_ s: Service) async {
-    if s.status == "running", let port = s.ports.first, let url = URL(string: "http://127.0.0.1:\(port)") {
-      NSWorkspace.shared.open(url)
-      return
-    }
-    await board.start(s)
+  private func openPort(_ s: Service) {
+    guard let port = s.ports.first, let url = URL(string: "http://127.0.0.1:\(port)") else { return }
+    NSWorkspace.shared.open(url)
+  }
+
+  private func copyRun(_ s: Service) {
+    let cmd = "cd \(s.cwd ?? ".") && \(s.command ?? "")"
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(cmd, forType: .string)
+  }
+
+  private func openLogs(_ s: Service) {
+    guard let id = s.id?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return }
+    guard let url = URL(string: "\(BoardConfig.url)/?sel=\(id)") else { return }
+    NSWorkspace.shared.open(url)
   }
 
   private func openBoard() {

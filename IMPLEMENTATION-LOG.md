@@ -35,7 +35,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-25 | Ask before restarting an unmanaged row with a lossy command | done | `commandLooksLossy` on rebuilt `ps` commands. Unpinned `POST /api/restart` by rootPid is 409 unless `confirm`. Page opens Edit; Save pins and restarts. |
 | F-26 | Allow editing a preset | done | `PUT /api/presets/:id` keeps the id. Edit in the preset sheet; unknown id is 404. |
 | F-27 | Stop running `du` on every worktree and Attention scan | done | `diskMb` cached by `.git` mtime, 10 min TTL. Attention passes `disk: false`. Card shows `…` until size arrives. |
-| F-28 | Grow the tray: per-service actions and notifications | todo | Tier 3. Human: tray first |
+| F-28 | Grow the tray: per-service actions and notifications | done | Per-row menu: Open, Restart, Stop, Copy run command, Logs (`?sel=`). One notification when `unhealthy` or `crash.gaveUp` flips. First poll is primed so existing alerts do not fire. |
 | F-29 | Trace one request across several services' logs | todo | Tier 3 — waiting |
 
 ## Tier 1 pause

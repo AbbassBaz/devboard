@@ -34,6 +34,10 @@ let toastTimer = 0;
 let lastLogSig = "";
 
 try { sel = localStorage.getItem("devboard.sel"); } catch {}
+try {
+  const q = new URLSearchParams(location.search).get("sel");
+  if (q) saveSel(q);
+} catch {}
 
 function lastWtDir() {
   try { return localStorage.getItem("devboard.worktreesDir") || ""; } catch { return ""; }
