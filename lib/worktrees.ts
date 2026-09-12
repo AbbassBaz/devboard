@@ -118,12 +118,40 @@ async function git(args: string[], reject = false): Promise<string> {
   return text;
 }
 
+const DISK_TTL_MS = 10 * 60 * 1000;
+const diskHits = new Map<string, { mtimeMs: number; at: number; mb: number }>();
+let duRuns = 0;
+
+export function resetDiskCache(): void {
+  diskHits.clear();
+  duRuns = 0;
+}
+
+export function countDiskDu(): number {
+  return duRuns;
+}
+
+async function gitStamp(path: string): Promise<number> {
+  const git = join(path, ".git");
+  const info = await stat(git).catch(() => undefined);
+  if (!info) return 0;
+  if (info.isFile()) return info.mtimeMs;
+  const head = await stat(join(git, "HEAD")).catch(() => undefined);
+  return head?.mtimeMs ?? info.mtimeMs;
+}
+
 async function diskMb(path: string): Promise<number> {
+  const mtimeMs = await gitStamp(path);
+  const hit = diskHits.get(path);
+  if (hit && hit.mtimeMs === mtimeMs && Date.now() - hit.at < DISK_TTL_MS) return hit.mb;
+  duRuns++;
   const proc = Bun.spawn(["du", "-sk", path], { stdout: "pipe", stderr: "ignore" });
   const text = await new Response(proc.stdout).text();
   await proc.exited;
   const kb = Number(text.trim().split(/\s+/)[0]);
-  return Number.isFinite(kb) ? Math.round(kb / 1024) : 0;
+  const mb = Number.isFinite(kb) ? Math.round(kb / 1024) : 0;
+  diskHits.set(path, { mtimeMs, at: Date.now(), mb });
+  return mb;
 }
 
 type Linked = { path: string; gitdir: string };
@@ -253,7 +281,8 @@ export async function removeOrphanedWorktree(path: string): Promise<{ path: stri
   return { path: expanded };
 }
 
-export async function scanWorktrees(dir: string, services: Service[] = []): Promise<{ dir: string; worktrees: WorktreeInfo[]; stale: StaleWorktree[] }> {
+export async function scanWorktrees(dir: string, services: Service[] = [], opts: { disk?: boolean } = {}): Promise<{ dir: string; worktrees: WorktreeInfo[]; stale: StaleWorktree[] }> {
+  const wantDisk = opts.disk !== false;
   const { dir: root, stale } = await scanStaleWorktrees(dir);
   const { mains } = await findGitCheckouts(root);
   const worktrees: WorktreeInfo[] = [];
@@ -288,7 +317,7 @@ export async function scanWorktrees(dir: string, services: Service[] = []): Prom
         locked: entry.locked,
         prunable: entry.prunable,
         dirty: missing ? false : dirty,
-        diskMb: missing ? 0 : await diskMb(entry.path),
+        ...(wantDisk && !missing ? { diskMb: await diskMb(entry.path) } : {}),
         serviceIds: matched.map((s) => s.id!).filter(Boolean),
         ports: [...new Set(matched.flatMap((s) => s.ports))],
         hasTemplate: !missing && await exists(join(entry.path, TEMPLATE_FILE)),

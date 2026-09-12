@@ -124,7 +124,7 @@ export type WorktreeInfo = {
   locked?: string;
   prunable?: string;
   dirty: boolean;
-  diskMb: number;
+  diskMb?: number;
   serviceIds: string[];
   ports: number[];
   hasTemplate?: boolean;

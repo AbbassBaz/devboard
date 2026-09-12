@@ -749,7 +749,7 @@ function paintWt() {
     ].join(" ");
     const ports = w.ports.map((p) => `<a href="http://localhost:${p}" target="_blank" rel="noopener">:${p}</a>`).join(" ");
     return `<article class="wt-card" data-path="${esc(w.path)}">
-      <div class="badge">${esc(w.branch || "detached")} · ${w.diskMb} MB</div>
+      <div class="badge">${esc(w.branch || "detached")} · ${w.diskMb == null ? "…" : `${w.diskMb} MB`}</div>
       <div class="name">${esc(name)}</div>
       <div class="path" title="${esc(w.path)}">${esc(home(w.path))}</div>
       <div>${tags} ${ports || '<span class="mono">no servers</span>'}</div>

@@ -6,12 +6,14 @@ import { existsSync, realpathSync } from "node:fs";
 import type { Pinned, Service } from "../lib/types";
 import {
   blockingWorktreeServices,
+  countDiskDu,
   createWorktree,
   parseGitdirFile,
   parseWorktreeList,
   planWorktreeLaunch,
   pruneStaleWorktrees,
   removeOrphanedWorktree,
+  resetDiskCache,
   retireWorktree,
   scanStaleWorktrees,
   scanWorktrees,
@@ -204,6 +206,23 @@ describe("scan, create and retire worktrees", () => {
     expect(wt).toMatchObject({ main: false, dirty: true, branch: "agent", serviceIds: ["api-1"], ports: [3001], hasTemplate: true });
     expect(main).toMatchObject({ hasTemplate: false });
     expect(wt!.diskMb).toBeGreaterThanOrEqual(0);
+  });
+
+  test("disk size is cached for ten minutes and skipped when disk is false", async () => {
+    const root = tmp();
+    const repo = join(root, "app");
+    await git(root, ["init", "-q", "-b", "main", "app"]);
+    await git(repo, ["commit", "--allow-empty", "-qm", "init"]);
+    resetDiskCache();
+    const first = await scanWorktrees(root);
+    expect(countDiskDu()).toBeGreaterThan(0);
+    const n = countDiskDu();
+    const second = await scanWorktrees(root);
+    expect(countDiskDu()).toBe(n);
+    expect(second.worktrees[0]?.diskMb).toBe(first.worktrees[0]?.diskMb);
+    const skim = await scanWorktrees(root, [], { disk: false });
+    expect(countDiskDu()).toBe(n);
+    expect(skim.worktrees.every((w) => w.diskMb === undefined)).toBe(true);
   });
 
   test("create adds a sibling checkout and retire refuses main, dirty, then force-removes", async () => {

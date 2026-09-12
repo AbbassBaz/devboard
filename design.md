@@ -127,7 +127,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 ### Overlay sheets
 
-Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for worktrees, project create/edit, presets, attention, env, and full server edit. Clicking the dimmed backdrop or `Esc` closes. Do not revive the old tabbed board. A worktree card shows **Import pins** when that checkout has a `devboard.json`. Launch and project Add from folder import the same file when it exists (idempotent, no overwrite). A preset row has Edit; it pre-fills the form and PUTs `/api/presets/:id` (set the editing id after `openSheet`).
+Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for worktrees, project create/edit, presets, attention, env, and full server edit. Clicking the dimmed backdrop or `Esc` closes. Do not revive the old tabbed board. A worktree card shows disk as `…` until size arrives (Attention skips `du`). A worktree card shows **Import pins** when that checkout has a `devboard.json`. Launch and project Add from folder import the same file when it exists (idempotent, no overwrite). A preset row has Edit; it pre-fills the form and PUTs `/api/presets/:id` (set the editing id after `openSheet`).
 
 ## Behaviour
 

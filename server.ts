@@ -576,7 +576,7 @@ export function createHandler(deps: Deps): BoardHandler {
         const { services } = await snapshot();
         let worktrees: WorktreeInfo[] = [];
         if (dir.trim()) {
-          try { worktrees = (await scanWorktrees(dir, services)).worktrees; } catch { worktrees = []; }
+          try { worktrees = (await scanWorktrees(dir, services, { disk: false })).worktrees; } catch { worktrees = []; }
         }
         const lastErrors = new Map<string, string[]>();
         await Promise.all(services.filter((s) => s.hasLog && s.id && s.status === "stopped").map(async (s) => {
