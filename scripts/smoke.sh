@@ -53,7 +53,7 @@ waitfor "[ -n \"\$(rootpid)\" ]"
 row
 ROOT=$(rootpid); check "[ '$ROOT' = '$TERM_SH' ]" "root pid is the terminal's sh ($TERM_SH)"
 
-echo "[4] pin"; api POST /api/pin "{\"rootPid\":$ROOT}"; echo
+echo "[4] pin"; bun run bin/devboard.ts pin 3999; echo
 check "grep -q '\"id\": \"devboard-3999\"' '$DEVBOARD_HOME/services.json'" "services.json has devboard-3999"
 
 echo "[5] kill"; api POST /api/kill "{\"rootPid\":$ROOT}"; echo
@@ -89,6 +89,14 @@ api POST /api/kill "{\"rootPid\":$NEW}"; echo; api DELETE /api/pin/devboard-3999
 STARTED=
 waitfor "! curl -sf http://127.0.0.1:3999"; sleep 0.3; row
 check "! api GET /api/services | grep -q '3999'" "row gone after kill + unpin"
+
+echo "[9] CLI add, ls --json, open, rm, doctor"
+bun run bin/devboard.ts add smoke-cli "$PWD" "true" 3998
+bun run bin/devboard.ts ls --json | bun -e 'const d = await new Response(Bun.stdin).json(); if (!Array.isArray(d) || !d.some(s => s.id === "smoke-cli-3998")) { console.error("ls --json missing smoke-cli-3998"); process.exit(1); }'
+bun run bin/devboard.ts open smoke-cli-3998 >/dev/null
+bun run bin/devboard.ts rm smoke-cli-3998
+check "! grep -q smoke-cli-3998 '$DEVBOARD_HOME/services.json'" "CLI add/rm round-trip"
+if bun run bin/devboard.ts doctor; then echo "    ✓ doctor exits 0"; else echo "    ✗ doctor exits 0"; ok=0; fi
 
 echo "[poll cost] $( { /usr/bin/time -p curl -s -o /dev/null http://127.0.0.1:4242/api/services; } 2>&1 | grep real )"
 kill -TERM "$DB" 2>/dev/null; wait "$DB" 2>/dev/null; DB=
