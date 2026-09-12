@@ -114,6 +114,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 **Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`): log filter (26px, flex 1, min 120). Error chip only if the log has errors — click cycles next error, ⇧click toggles errors-only (`1 error ↓` → `error 1/3 ↓` → `errors only · 3`). `↓ Resume follow` (accent outline) only when follow is off. Right: `N lines` or `k/N lines`, `title` = log path. While Trace is open the filter, error chip, and follow hide; **Close trace** and `N hits` take their place.
 
 **Body** (`10px 16px 20px`, mono 12 / 1.6, `#c3c8d1`):
+- Every line is cleaned before it is rendered: CSI, OSC, and single-character escape sequences removed and a `\r` progress bar resolved to its last frame (`cleanLine` in `lib/logs.ts`). No raw control byte — `[?25h` and friends — ever reaches the pane, and a download bar shows one line, not every frame.
 - Line: flex, gap 14, pad `0 8px`, margin `0 -8px`, radius 3, `cursor: copy`; hover `#1f232a`. Columns: ln 30px right `#4a5160` · time `#5d636e` · text.
 - Color by `classifyLine` in `lib/logs.ts` (the page uses the `level` from `GET /api/logs/:id`): error → `#f28b82` on `rgba(229,83,75,.1)`; warn → `#e2b96a`; info → `#8fd3a6`; markers `/^===|^\$ |^> /` → dim. Error pills and the top-bar count use `errorCount` from `GET /api/services`.
 - Current error: `box-shadow: inset 2px 0 0 #e5534b`.

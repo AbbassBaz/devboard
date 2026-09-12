@@ -1,0 +1,7 @@
+===== 2026-09-12T04:00:00.000Z start in /tmp/app: pnpm dev =====
+[?25l[32m✓[0m Ready in 164ms[?25h
+]0;pnpm devProgress: resolved 1, reused 0, downloaded 0, added 0
+  0%|          | 0.00/125M [00:00<?, ?B/s] 50%|█████     | 62.5M/125M [00:04<00:04, 14.0MB/s]100%|██████████| 125M/125M [00:08<00:00, 15.2MB/s]
+[2K[1G[36mwait[39m  - compiling /page...
+2026-09-12 04:00:02,585 - [32mINFO[0m livekit.agents - process exiting [90m{"reason": "shutdown"}[0m
+]8;;http://localhost:3010\open the app]8;;\

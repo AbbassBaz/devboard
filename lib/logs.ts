@@ -1,10 +1,32 @@
 export type LogLevel = "error" | "warn" | "info" | "debug" | "other";
 
-const ANSI = /\x1b\[[0-9;]*m/g;
+/** CSI: SGR colour, cursor moves, erases, and private `?` modes such as `ESC[?25h`. */
+const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+/** OSC: window titles and hyperlinks, terminated by BEL or ST. */
+const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+/** Single-character escapes (ESC c, ESC ], ESC \, …) left over after the two above. */
+const ESC1 = /\x1b[@-Z\\-_]/g;
+/** Anything still below 0x20 that is not a tab or a newline, plus DEL. */
+const C0 = /[\x00-\x08\x0b-\x1f\x7f]/g;
 
-export function stripAnsi(s: string): string {
-  return s.replace(ANSI, "");
+/**
+ * One printable line: every terminal control sequence removed and `\r` resolved so a
+ * progress bar keeps only its final frame. Never returns a byte below 0x20 except tab.
+ */
+export function cleanLine(s: string): string {
+  const stripped = String(s ?? "").replace(CSI, "").replace(OSC, "").replace(ESC1, "");
+  return stripped.split("\n").map(lastFrame).join("\n").replace(C0, "");
 }
+
+/** Text after the last `\r` that is not the CRLF artefact at the end of the line. */
+function lastFrame(line: string): string {
+  const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+  const i = text.lastIndexOf("\r");
+  return i < 0 ? text : text.slice(i + 1);
+}
+
+/** @deprecated use {@link cleanLine}. Kept while `public/app.js` still has its own copy. */
+export const stripAnsi = cleanLine;
 
 const TS = /^(\s*(?:\[[^\]]{6,32}\]|\d{4}-\d{2}-\d{2}[T ][\d:.Z+-]+|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*)/;
 

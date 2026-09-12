@@ -1,9 +1,53 @@
 import { describe, expect, test } from "bun:test";
-import { classifyLine, countErrors, findIds, looksLikeJson, splitLogLine, stripAnsi } from "../lib/logs";
+import { cleanLine, classifyLine, countErrors, findIds, looksLikeJson, splitLogLine } from "../lib/logs";
 
-describe("stripAnsi and splitLogLine", () => {
-  test("drops SGR sequences and lifts an ISO timestamp", () => {
-    expect(stripAnsi("\x1b[31merror\x1b[0m")).toBe("error");
+const FIXTURE = `${import.meta.dir}/fixtures/logs/control-codes.log`;
+
+async function fixtureLines(name: string): Promise<string[]> {
+  const text = await Bun.file(`${import.meta.dir}/fixtures/logs/${name}`).text();
+  const lines = text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+describe("cleanLine", () => {
+  test("drops SGR, cursor, erase, and private-mode sequences", () => {
+    expect(cleanLine("\x1b[31merror\x1b[0m")).toBe("error");
+    expect(cleanLine("\x1b[?25l\x1b[32m✓\x1b[0m Ready\x1b[?25h")).toBe("✓ Ready");
+    expect(cleanLine("\x1b[2K\x1b[1Gcompiling")).toBe("compiling");
+  });
+
+  test("drops OSC window titles and hyperlinks, BEL- or ST-terminated", () => {
+    expect(cleanLine("\x1b]0;pnpm dev\x07ready")).toBe("ready");
+    expect(cleanLine("\x1b]8;;http://localhost:3010\x1b\\open\x1b]8;;\x1b\\")).toBe("open");
+  });
+
+  test("keeps only the last frame of a carriage-return progress bar", () => {
+    expect(cleanLine("\r 10%|# | 1/10\r100%|##| 10/10")).toBe("100%|##| 10/10");
+    expect(cleanLine("done\r")).toBe("done");
+  });
+
+  test("leaves no byte below 0x20 except tab anywhere in the fixture", async () => {
+    for (const raw of await fixtureLines("control-codes.log")) {
+      const text = cleanLine(raw);
+      expect(text).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f]/);
+      expect(text.includes("[?25h")).toBe(false);
+    }
+  });
+
+  test("the fixture progress-bar line equals its last frame", async () => {
+    const lines = await fixtureLines("control-codes.log");
+    const bar = lines.find((l) => l.includes("125M"))!;
+    expect(cleanLine(bar)).toBe("100%|██████████| 125M/125M [00:08<00:00, 15.2MB/s]");
+  });
+
+  test("the fixture holds real control bytes, so the test is not vacuous", async () => {
+    expect((await Bun.file(FIXTURE).text()).includes("\x1b[?25h")).toBe(true);
+  });
+});
+
+describe("splitLogLine", () => {
+  test("lifts an ISO timestamp", () => {
     expect(splitLogLine("2026-09-11T01:21:30.154Z ready on :3010")).toEqual({
       time: "2026-09-11T01:21:30.154Z",
       body: "ready on :3010",
