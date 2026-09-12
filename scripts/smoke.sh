@@ -34,7 +34,7 @@ api() {
 }
 row() { api GET /api/services | bun -e 'const b = await new Response(Bun.stdin).json(); const s = b.services.find(s => s.ports.includes(3999)); console.log("    " + (s ? JSON.stringify({status:s.status,name:s.name,kind:s.kind,rootPid:s.rootPid,pids:s.pids,pinned:s.pinned,hasLog:s.hasLog,id:s.id}) : "no row for 3999"));'; }
 rootpid() { api GET /api/services | bun -e 'const b = await new Response(Bun.stdin).json(); console.log(b.services.find(s => s.ports.includes(3999) && s.status === "running")?.rootPid ?? "")'; }
-waitfor() { for _ in $(seq 1 50); do eval "$1" >/dev/null 2>&1 && return 0; sleep 0.1; done; echo "    TIMEOUT waiting: $1"; ok=0; return 1; }
+waitfor() { for _ in $(seq 1 100); do eval "$1" >/dev/null 2>&1 && return 0; sleep 0.1; done; echo "    TIMEOUT waiting: $1"; ok=0; return 1; }
 check() { if eval "$1"; then echo "    ✓ $2"; else echo "    ✗ $2"; ok=0; fi; }
 
 echo "[1] start devboard"
@@ -47,9 +47,10 @@ waitfor "curl -sf http://127.0.0.1:4242/api/services"
 
 echo "[2] start a throwaway server the way a terminal would (sh -c '...; exit 0' keeps sh as the tree root)"
 sh -c "bun -e 'Bun.serve({port:3999,fetch(){return new Response(\"hi\")}});setInterval(()=>{},1e6)'; exit 0" & TERM_SH=$!
-waitfor "curl -sf http://127.0.0.1:3999"; sleep 0.3
-
-echo "[3] row appears"; row
+waitfor "curl -sf http://127.0.0.1:3999"
+echo "[3] row appears"
+waitfor "[ -n \"\$(rootpid)\" ]"
+row
 ROOT=$(rootpid); check "[ '$ROOT' = '$TERM_SH' ]" "root pid is the terminal's sh ($TERM_SH)"
 
 echo "[4] pin"; api POST /api/pin "{\"rootPid\":$ROOT}"; echo
