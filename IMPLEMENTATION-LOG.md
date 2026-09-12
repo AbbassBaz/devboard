@@ -1,7 +1,7 @@
 # Implementation log
 
 Plan: `suggestions/final-plan.md`  
-Branch: `plan/tier-2` (Tier 1 merged to main as `327e050`)  
+Branch: `plan/tier-3` (Tier 2 merged to main as `a09ae07`)  
 Baseline: `bun test` — 133 pass, 0 fail (2026-09-11). After Tier 1: 144. No linter.
 
 Precondition: landed uncommitted fonts, fixture scrub, project links, and worktree pin copying as `91f5dc7`.
@@ -14,7 +14,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-04 | Track the processes devboard spawns so status is real | done | `Tracked` in `state.json`. Unmatched live pid → `starting`; exit codes and `crash.gaveUp` on the row. GET `/api/services` no longer ticks crashes or writes projects. 152 pass. |
 | F-05 | Contain log ids to the log directory | done | `isValidLogId` + resolved-path check. GET/DELETE `..%2F..%2Foutside` is 400; fixture unchanged. |
 | F-06 | Make the tray build optional in `install` | done | No-swift PATH prints the skip line and exits 0 after the symlink. `tray:build` script added. |
-| F-07 | CI on a macOS runner, with a smoke script that cannot touch a real board | done | macos-14 workflow + `.bun-version` 1.2.18. Locally, busy :4242 makes smoke abort before any API call; sentinel survived. |
+| F-07 | CI on a macOS runner, with a smoke script that cannot touch a real board | done | macos-14 tests + macos-15 tray (Swift 6 skip if missing). Smoke waits for a discovered row after :3999 listens so the F-15 3s snapshot cannot hide it. Busy :4242 still aborts before any API call. |
 | F-08 | Rewrite the README for a stranger | done | Pitch, screenshot from throwaway DEVBOARD_HOME, Requirements, Quickstart, env table, Why, Security, Known issues. Page spec moved into design.md. |
 | F-09 | Remove or scrub private names in `docs/superpowers/` | done | Deleted the folder. `rg` for private names is clean outside suggestions/. |
 | F-10 | Rotate logs while a server runs, not only at start | done | `rotateRunning` copies last 2 MB to `.log.1` and ftruncates the live file. 3s loop calls it. Cap only while the board runs. |
@@ -28,15 +28,15 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-18 | Validate hand-edited registry JSON and serialize writes | done | Skip bad entries and log one line. GET leaves a `{ "nope": true }` file untouched. Per-path write queue + unique tmp names; 20 concurrent adds keep all 20. |
 | F-19 | Reconcile AGENTS.md with the new direction and add CONTRIBUTING.md | done | Loopback-only wording; design.md is the current spec and can be amended in-PR. CONTRIBUTING.md covers the four gotchas. |
 | F-20 | Refuse to retire a worktree while a server runs in it | done | Retire and orphan-remove 409 with names while running or starting under the path. Toast offers Stop and retire. Main-worktree protection unchanged. Browser: starting `wt-sleep` in a throwaway worktree blocked Retire; Stop and retire killed it and removed the checkout. |
-| F-21 | Give saved services an identity that survives name collisions | todo | Tier 3 — waiting |
-| F-22 | CLI parity, `--json`, and a `doctor` command | todo | Tier 3 — waiting |
-| F-23 | Shareable pin template checked into a project | todo | Tier 3. Human: scan automatically via a button |
-| F-24 | Point the tray at the same board as the CLI, and read the version from package.json | todo | Tier 3 — waiting |
-| F-25 | Ask before restarting an unmanaged row with a lossy command | todo | Tier 3 — waiting |
-| F-26 | Allow editing a preset | todo | Tier 3 — waiting |
-| F-27 | Stop running `du` on every worktree and Attention scan | todo | Tier 3 — waiting |
-| F-28 | Grow the tray: per-service actions and notifications | todo | Tier 3. Human: tray first |
-| F-29 | Trace one request across several services' logs | todo | Tier 3 — waiting |
+| F-21 | Give saved services an identity that survives name collisions | done | `add` suffixes on id collision when cwd differs. `replace` keeps the id. Same cwd+port pin replaces in place. Existing `services.json` loads unchanged. |
+| F-22 | CLI parity, `--json`, and a `doctor` command | done | `add`/`rm`/`pin`/`open`/`ls --json`/`doctor`. Smoke step [4] pins via CLI; step [9] round-trips add/ls/open/rm. Non-GET CLI calls always send JSON. |
+| F-23 | Shareable pin template checked into a project | done | `devboard.json` at a project root. Import via + Add, worktree Import pins, Launch, and project Add from folder. Idempotent; never writes live status back. |
+| F-24 | Point the tray at the same board as the CLI, and read the version from package.json | done | Tray reads `DevboardURL` from Info.plist. `build-tray.sh` writes it from `DEVBOARD_URL`/`PORT` and the version from `package.json`. Rebuild required for a new URL. |
+| F-25 | Ask before restarting an unmanaged row with a lossy command | done | `commandLooksLossy` on rebuilt `ps` commands. Unpinned `POST /api/restart` by rootPid is 409 unless `confirm`. Page opens Edit; Save pins and restarts. |
+| F-26 | Allow editing a preset | done | `PUT /api/presets/:id` keeps the id. Edit in the preset sheet; unknown id is 404. |
+| F-27 | Stop running `du` on every worktree and Attention scan | done | `diskMb` cached by `.git` mtime, 10 min TTL. Attention passes `disk: false`. Card shows `…` until size arrives. |
+| F-28 | Grow the tray: per-service actions and notifications | done | Per-row menu: Open, Restart, Stop, Copy run command, Logs (`?sel=`). One notification when `unhealthy` or `crash.gaveUp` flips. First poll is primed so existing alerts do not fire. |
+| F-29 | Trace one request across several services' logs | done | `findIds` + `GET /api/trace`. Clickable ids in the log pane open a Trace view grouped by service. JSON `requestId` and kin become the token. No time-window fallback. |
 
 ## Tier 1 pause
 

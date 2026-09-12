@@ -17,6 +17,7 @@ export type RunningService = {
   ports: number[];
   cwd?: string;
   command: string;
+  commandLossy?: boolean;
   name: string;
   kind: Kind;
   uptime: string;
@@ -57,6 +58,7 @@ export type Service = {
   ports: number[];
   cwd?: string;
   command?: string;
+  commandLossy?: boolean;
   uptime?: string;
   cpu?: number;
   memMb?: number;
@@ -122,9 +124,37 @@ export type WorktreeInfo = {
   locked?: string;
   prunable?: string;
   dirty: boolean;
-  diskMb: number;
+  diskMb?: number;
   serviceIds: string[];
   ports: number[];
+  hasTemplate?: boolean;
+};
+
+/** One row in a checked-in `devboard.json`. `cwd` is a relative subpath of the repo. */
+export type PinTemplateEntry = {
+  name: string;
+  command: string;
+  port: number;
+  cwd?: string;
+  healthUrl?: string;
+  env?: Record<string, string>;
+  restartOnCrash?: boolean;
+};
+
+export type TraceHit = {
+  i: number;
+  line: string;
+  level: "error" | "warn" | "info" | "debug" | "other";
+};
+
+export type TraceGroup = {
+  id: string;
+  hits: TraceHit[];
+};
+
+export type TraceResult = {
+  token: string;
+  groups: TraceGroup[];
 };
 
 export type StaleReason = "prunable" | "orphaned";

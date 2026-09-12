@@ -15,6 +15,14 @@ export function pinnedId(name: string, port: number): string {
   return `${slugify(name)}-${port}`;
 }
 
+export function uniquePinnedId(base: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
 function skip(path: string, field: string): void {
   console.log(`registry: ${basename(path)} skipped: ${field}`);
 }
@@ -125,27 +133,29 @@ export class Registry {
 
   async add(input: Omit<Pinned, "id">): Promise<Pinned> {
     return this.enqueue(this.path, async () => {
-      const pinned: Pinned = { id: pinnedId(input.name, input.port), ...input };
-      const list = (await this.load()).filter((p) => p.id !== pinned.id);
+      const list = await this.load();
+      const same = list.find((p) => p.cwd === input.cwd && p.port === input.port);
+      if (same) {
+        const pinned: Pinned = { ...same, ...input, id: same.id };
+        await this.writeJson(this.path, list.map((p) => (p.id === same.id ? pinned : p)));
+        return pinned;
+      }
+      const pinned: Pinned = { id: uniquePinnedId(pinnedId(input.name, input.port), list.map((p) => p.id)), ...input };
       list.push(pinned);
       await this.writeJson(this.path, list);
       return pinned;
     });
   }
 
-  /** Replace `oldId` with new values; the id may change when name or port change. Returns undefined if `oldId` is unknown. */
+  /** Replace `oldId` in place. The id stays put so logs, projects, presets, and hide state keep working. */
   async replace(oldId: string, input: Omit<Pinned, "id">): Promise<Pinned | undefined> {
-    const pinned = await this.enqueue(this.path, async () => {
+    return this.enqueue(this.path, async () => {
       const list = await this.load();
       if (!list.some((p) => p.id === oldId)) return undefined;
-      const nextPin: Pinned = { id: pinnedId(input.name, input.port), ...input };
-      const next = list.filter((p) => p.id !== oldId && p.id !== nextPin.id);
-      next.push(nextPin);
-      await this.writeJson(this.path, next);
-      return nextPin;
+      const pinned: Pinned = { ...input, id: oldId };
+      await this.writeJson(this.path, list.map((p) => (p.id === oldId ? pinned : p)));
+      return pinned;
     });
-    if (pinned && oldId !== pinned.id) await this.retargetMember(oldId, pinned.id);
-    return pinned;
   }
 
   async pin(running: RunningService, name?: string): Promise<Pinned> {
@@ -354,6 +364,19 @@ export class Registry {
 
   async saveTracked(list: Tracked[]): Promise<void> {
     await this.enqueue(this.statePath, () => this.writeJson(this.statePath, list));
+  }
+
+  /** Replace `id` in place. The id stays put so resume and delete keep working after a rename. */
+  async replacePreset(id: string, input: Omit<Preset, "id">): Promise<Preset | undefined> {
+    const name = input.name.trim();
+    if (!name) throw new Error("name required");
+    return this.enqueue(this.presetsPath, async () => {
+      const list = await this.loadPresets();
+      if (!list.some((p) => p.id === id)) return undefined;
+      const preset: Preset = { ...input, name, id, serviceIds: [...new Set(input.serviceIds)], urls: input.urls ?? [] };
+      await this.writeJson(this.presetsPath, list.map((p) => (p.id === id ? preset : p)));
+      return preset;
+    });
   }
 
   async deletePreset(id: string): Promise<boolean> {

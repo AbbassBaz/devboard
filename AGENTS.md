@@ -14,7 +14,7 @@ Loopback only by design; no remote mode or auth.
 bun install
 bun run start                 # server + menu bar extra
 bun run dev                   # restarts on file change
-bun test                      # 168 tests, ~10s, one live test spawns a real process on :39999
+bun test                      # 190 tests, ~10s, one live test spawns a real process on :39999
 bash scripts/smoke.sh         # end-to-end against a real board; needs :4242 and :3999 free
 bun run devboard -- <cmd>     # CLI without installing
 bun run setup                 # symlink `devboard` into ~/.local/bin, build + install the tray app
@@ -34,11 +34,12 @@ DEVBOARD_TRAY=0 bun run start # server only, no menu bar extra
 | `lib/health.ts` | Explicit health URL probes only. No URL means ready. |
 | `lib/restarts.ts` | `CrashWatch`: 5 tries, exponential backoff, disarmed by stop/kill |
 | `lib/env.ts` | `KEY=value` parsing, live `ps -Eww` env read |
-| `lib/logs.ts` | ANSI strip, timestamp split, line classification |
+| `lib/logs.ts` | ANSI strip, timestamp split, line classification, `findIds` |
 | `lib/attention.ts` | Alerts: port conflicts, crashed, dirty worktree, log dir size |
 | `lib/projects.ts` | Project membership and aggregate views |
 | `lib/worktrees.ts` | `git worktree` scan, create, retire, prune, open in editor |
 | `lib/suggest.ts` | Command suggestions from `package.json`, Compose, Procfile |
+| `lib/template.ts` | `devboard.json` pin template parse and import plan |
 | `public/` | The whole UI. `index.html`, `app.js`, `app.css`. No build step. |
 | `bin/devboard.ts` | CLI. Talks to the board over HTTP at `DEVBOARD_URL`. |
 | `tray/` | SwiftPM menu bar app. Built by `scripts/build-tray.sh` into `tray/Dist/Devboard.app`. |

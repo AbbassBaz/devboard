@@ -19,8 +19,15 @@ jobs:
 
   tray:
     needs: test
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - run: swift build -c release
+      - name: Build tray
         working-directory: tray
+        run: |
+          swift --version
+          if ! swift --version | grep -qE 'Swift version [6-9]\.'; then
+            echo "skip: Swift 6 toolchain not on this runner"
+            exit 0
+          fi
+          swift build -c release

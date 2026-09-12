@@ -12,8 +12,8 @@ const APP = join(homedir(), "Applications", "Devboard.app");
 async function api(method: string, path: string, body?: unknown) {
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: method === "GET" ? undefined : { "content-type": "application/json" },
+    body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText);
@@ -35,12 +35,18 @@ function usage(code = 1): never {
   Type these in any terminal (after once: devboard install):
 
   devboard                 list what's on / off
+  devboard ls [--json]     same list; --json prints the services array
+  devboard add <name> <folder> <command> <port>
+  devboard rm <id>         unpin a saved server
+  devboard pin <port>      pin the running row on that port
+  devboard open <id>       open the saved folder in the editor
   devboard start <id>      start a saved server
   devboard stop <id>       stop a running server
   devboard restart <id>    restart
   devboard logs <id> [-f]  print the log; -f follows
   devboard start-all       start every saved server that is off
   devboard stop-all        stop every running dev server
+  devboard doctor          check bun, PATH tools, :4242, and the tray
   devboard up              start the board (and the menu bar) if needed
   devboard tray            show the menu bar extra
   devboard install         put \`devboard\` on your PATH and install the menu bar app
@@ -106,24 +112,107 @@ async function install() {
   }
 }
 
-const [cmd, ...rest] = process.argv.slice(2);
-const follow = rest.includes("-f");
-const id = rest.find((a) => a !== "-f");
+type Svc = {
+  id?: string;
+  name: string;
+  status: string;
+  ports: number[];
+  kind: string;
+  rootPid?: number;
+  pinned?: boolean;
+  cwd?: string;
+};
+
+function bunMeets(engine: string, version: string): boolean {
+  const want = /(\d+)\.(\d+)/.exec(engine);
+  const have = /(\d+)\.(\d+)/.exec(version);
+  if (!want || !have) return true;
+  const [wMaj, wMin] = [Number(want[1]), Number(want[2])];
+  const [hMaj, hMin] = [Number(have[1]), Number(have[2])];
+  return hMaj > wMaj || (hMaj === wMaj && hMin >= wMin);
+}
+
+async function doctor(): Promise<number> {
+  const pkg = await Bun.file(join(ROOT, "package.json")).json() as { engines?: { bun?: string } };
+  const need = pkg.engines?.bun ?? ">=1.2";
+  const bunOk = bunMeets(need, Bun.version);
+  const lsof = Bun.which("lsof");
+  const ps = Bun.which("ps");
+  const localBin = join(homedir(), ".local", "bin");
+  const onPath = (process.env.PATH ?? "").split(":").includes(localBin);
+  let portLine = `4242 free`;
+  let portHeld = false;
+  if (lsof) {
+    const proc = Bun.spawn(["lsof", "-nP", "-iTCP:4242", "-sTCP:LISTEN"], { stdout: "pipe", stderr: "ignore" });
+    const text = await new Response(proc.stdout).text();
+    await proc.exited;
+    const line = text.trim().split("\n").find((l) => /\bLISTEN\b/.test(l));
+    if (line) {
+      portHeld = true;
+      const pid = line.split(/\s+/)[1] ?? "?";
+      portLine = `4242 held by pid ${pid}`;
+    }
+  }
+  const tray = existsSync(APP);
+  const rows: { hard: boolean; ok: boolean; text: string }[] = [
+    { hard: true, ok: bunOk, text: bunOk ? `bun ${Bun.version} meets ${need}` : `bun ${Bun.version} does not meet engines ${need} — install a newer Bun` },
+    { hard: true, ok: !!lsof, text: lsof ? `lsof on PATH (${lsof})` : "lsof not on PATH — install it (macOS ships it in /usr/sbin)" },
+    { hard: true, ok: !!ps, text: ps ? `ps on PATH (${ps})` : "ps not on PATH" },
+    { hard: false, ok: !portHeld, text: portHeld ? `${portLine} — the board is already up` : portLine },
+    { hard: false, ok: onPath, text: onPath ? `~/.local/bin is on PATH` : `~/.local/bin is not on PATH — add it or run: bun run devboard -- <cmd>` },
+    { hard: false, ok: tray, text: tray ? `tray app at ${APP}` : `tray app missing — run: bun run tray:build` },
+  ];
+  for (const r of rows) console.log(`${r.ok ? "ok" : "fix"}  ${r.text}`);
+  return rows.some((r) => r.hard && !r.ok) ? 1 : 0;
+}
+
+const raw = process.argv.slice(2);
+const jsonOut = raw.includes("--json");
+const follow = raw.includes("-f");
+const positional = raw.filter((a) => a !== "--json" && a !== "-f" && a !== "-h" && a !== "--help");
+const cmd = positional[0];
+const id = positional[1];
 
 try {
-  if (cmd === "help" || cmd === "-h" || cmd === "--help") usage(0);
+  if (cmd === "help" || raw.includes("-h") || raw.includes("--help")) usage(0);
   else if (cmd === "install") await install();
   else if (cmd === "up") await up();
   else if (cmd === "tray") launchTray();
+  else if (cmd === "doctor") process.exit(await doctor());
   else if (!cmd || cmd === "status" || cmd === "ls") {
     if (!(await isUp())) {
       console.error(`board is off at ${base} — start it with:  devboard up`);
       process.exit(1);
     }
-    const data = await api("GET", "/api/services") as { services: { id: string; name: string; status: string; ports: number[]; kind: string }[] };
-    for (const s of data.services.filter((x) => x.kind === "dev")) {
-      console.log(`${s.status === "running" ? "on " : "off"}  ${s.id}  ${s.name}  ${s.ports.map((p) => ":" + p).join(" ")}`);
+    const data = await api("GET", "/api/services") as { services: Svc[] };
+    if (jsonOut) {
+      console.log(JSON.stringify(data.services, null, 2));
+    } else {
+      for (const s of data.services.filter((x) => x.kind === "dev")) {
+        console.log(`${s.status === "running" ? "on " : "off"}  ${s.id}  ${s.name}  ${s.ports.map((p) => ":" + p).join(" ")}`);
+      }
     }
+  } else if (cmd === "add" && positional.length >= 5) {
+    const [, name, folder, command, portRaw] = positional;
+    const out = await api("POST", "/api/pinned", { name, cwd: folder, command, port: Number(portRaw) }) as { pinned: { id: string } };
+    console.log(`added ${out.pinned.id}`);
+  } else if (cmd === "rm" && id) {
+    await api("DELETE", `/api/pin/${encodeURIComponent(id)}`);
+    console.log(`removed ${id}`);
+  } else if (cmd === "pin" && id) {
+    const port = Number(id);
+    if (!Number.isInteger(port) || port < 1) throw new Error("pin needs a port");
+    const data = await api("GET", "/api/services") as { services: Svc[] };
+    const svc = data.services.find((s) => s.status === "running" && s.rootPid && s.ports.includes(port));
+    if (!svc?.rootPid) throw new Error(`no running server on :${port}`);
+    const out = await api("POST", "/api/pin", { rootPid: svc.rootPid }) as { pinned: { id: string } };
+    console.log(`pinned ${out.pinned.id}`);
+  } else if (cmd === "open" && id) {
+    const data = await api("GET", "/api/services") as { services: Svc[] };
+    const svc = data.services.find((s) => s.id === id);
+    if (!svc?.cwd) throw new Error("no saved folder for that id");
+    const out = await api("POST", "/api/open", { path: svc.cwd }) as { cmd?: string };
+    console.log(`opened ${svc.cwd}${out.cmd ? ` with ${out.cmd}` : ""}`);
   } else if (cmd === "start" && id) {
     const out = await api("POST", "/api/start", { id });
     console.log(`started ${id} pid ${out.pid}`);

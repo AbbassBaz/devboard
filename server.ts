@@ -13,6 +13,7 @@ import { parseLinks, projectViews, servicesInFolder } from "./lib/projects";
 import { Registry } from "./lib/registry";
 import { CrashWatch } from "./lib/restarts";
 import { suggestCommands } from "./lib/suggest";
+import { parsePinTemplate, planImport, readTemplateFile } from "./lib/template";
 import type { Pinned, ProjectLink, RunningService, Service, StartSpec, WorktreeInfo } from "./lib/types";
 import { blockingWorktreeServices, createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
@@ -162,6 +163,21 @@ export function createHandler(deps: Deps): BoardHandler {
     return [...new Set(ids)];
   };
 
+  const importFromDir = async (dir: string) => {
+    const text = await readTemplateFile(dir);
+    if (text === undefined) return { exists: false as const, created: [] as Pinned[], skipped: 0, entries: [] };
+    const entries = parsePinTemplate(text);
+    const existing = await registry.load();
+    const planned = planImport(dir, entries, existing);
+    const created: Pinned[] = [];
+    for (const input of planned) {
+      const dest = await stat(input.cwd).catch(() => undefined);
+      if (!dest?.isDirectory()) continue;
+      created.push(await registry.add(input));
+    }
+    return { exists: true as const, created, skipped: entries.length - created.length, entries };
+  };
+
   const readProjectInput = async (req: Request) => {
     const body = await readBody(req);
     const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -292,7 +308,9 @@ export function createHandler(deps: Deps): BoardHandler {
           const svc = await findRunning(body.rootPid);
           if (!svc) return fail("no running service with that rootPid", 404);
           if (!svc.cwd) return fail("working directory unknown, cannot restart");
-          spec = matchPinned(svc, pinnedList) ?? { id: logIdFor(svc), cwd: svc.cwd, command: svc.command };
+          const pinned = matchPinned(svc, pinnedList);
+          if (!pinned && svc.commandLossy && body.confirm !== true) return fail("command needs confirmation", 409);
+          spec = pinned ?? { id: logIdFor(svc), cwd: svc.cwd, command: svc.command };
           pids = svc.pids;
         } else if (typeof body.id === "string") {
           const pinned = pinnedList.find((p) => p.id === body.id);
@@ -375,6 +393,7 @@ export function createHandler(deps: Deps): BoardHandler {
         let input;
         try { input = await readProjectInput(req); } catch (e) { return fail(e instanceof Error ? e.message : String(e)); }
         if (!input.name) return fail("name required");
+        if (input.addFromFolder && input.folder) await importFromDir(input.folder);
         const memberIds = input.addFromFolder && input.folder
           ? [...new Set([...input.memberIds, ...await folderMembers(input.folder)])]
           : input.memberIds;
@@ -388,6 +407,7 @@ export function createHandler(deps: Deps): BoardHandler {
         if (!input.name) return fail("name required");
         const current = (await registry.loadProjects()).find((p) => p.id === decodeURIComponent(editProject[1]));
         if (!current) return fail("no project with that id", 404);
+        if (input.addFromFolder && input.folder) await importFromDir(input.folder);
         const memberIds = input.addFromFolder && input.folder
           ? [...new Set([...current.memberIds, ...input.memberIds, ...await folderMembers(input.folder)])]
           : (input.memberIds.length ? input.memberIds : current.memberIds);
@@ -407,6 +427,7 @@ export function createHandler(deps: Deps): BoardHandler {
           const folder = expandHome(body.folder.trim());
           const info = await stat(folder).catch(() => undefined);
           if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
+          await importFromDir(folder);
           const ids = await folderMembers(folder);
           let project = (await registry.loadProjects()).find((p) => p.id === projectId);
           if (!project) return fail("no project with that id", 404);
@@ -504,6 +525,7 @@ export function createHandler(deps: Deps): BoardHandler {
         const folder = await resolved(expandHome(path.trim()));
         const info = await stat(folder).catch(() => undefined);
         if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
+        await importFromDir(folder);
         const { services, pinned } = await snapshot();
         let repo = folder;
         try { repo = await resolved(await mainRepoOf(folder)); } catch { /* not a git checkout; start pins already in the folder */ }
@@ -554,7 +576,7 @@ export function createHandler(deps: Deps): BoardHandler {
         const { services } = await snapshot();
         let worktrees: WorktreeInfo[] = [];
         if (dir.trim()) {
-          try { worktrees = (await scanWorktrees(dir, services)).worktrees; } catch { worktrees = []; }
+          try { worktrees = (await scanWorktrees(dir, services, { disk: false })).worktrees; } catch { worktrees = []; }
         }
         const lastErrors = new Map<string, string[]>();
         await Promise.all(services.filter((s) => s.hasLog && s.id && s.status === "stopped").map(async (s) => {
@@ -581,6 +603,25 @@ export function createHandler(deps: Deps): BoardHandler {
       }
 
       const delPreset = /^\/api\/presets\/([^/]+)$/.exec(pathname);
+      if (method === "PUT" && delPreset) {
+        const body = await readBody(req);
+        if (typeof body.name !== "string" || !body.name.trim()) return fail("name required");
+        const serviceIds = Array.isArray(body.serviceIds) ? body.serviceIds.filter((id): id is string => typeof id === "string") : [];
+        const urls = Array.isArray(body.urls) ? body.urls.filter((u): u is string => typeof u === "string") : typeof body.urls === "string" ? body.urls.split("\n").map((u) => u.trim()).filter(Boolean) : [];
+        try {
+          const preset = await registry.replacePreset(decodeURIComponent(delPreset[1]), {
+            name: body.name,
+            projectId: typeof body.projectId === "string" ? body.projectId : undefined,
+            serviceIds,
+            urls,
+            worktree: typeof body.worktree === "string" ? body.worktree : undefined,
+            openEditor: body.openEditor === true,
+          });
+          return preset ? json({ preset }) : fail("no preset with that id", 404);
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
+      }
       if (method === "DELETE" && delPreset) {
         const removed = await registry.deletePreset(decodeURIComponent(delPreset[1]));
         return removed ? json({ ok: true }) : fail("no preset with that id", 404);
@@ -613,6 +654,28 @@ export function createHandler(deps: Deps): BoardHandler {
         return json({ suggestions: await suggestCommands(expandHome(dir.trim())) });
       }
 
+      if (method === "GET" && pathname === "/api/import") {
+        const dir = url.searchParams.get("dir") ?? "";
+        if (!dir.trim()) return fail("dir required");
+        const folder = expandHome(dir.trim());
+        const info = await stat(folder).catch(() => undefined);
+        if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
+        const text = await readTemplateFile(folder);
+        if (text === undefined) return json({ exists: false, entries: [], importable: 0 });
+        const entries = parsePinTemplate(text);
+        const importable = planImport(folder, entries, await registry.load()).length;
+        return json({ exists: true, entries, importable });
+      }
+      if (method === "POST" && pathname === "/api/import") {
+        const { dir } = await readBody(req);
+        if (typeof dir !== "string" || !dir.trim()) return fail("dir required");
+        const folder = expandHome(dir.trim());
+        const info = await stat(folder).catch(() => undefined);
+        if (!info?.isDirectory()) return fail(`folder does not exist: ${folder}`);
+        const result = await importFromDir(folder);
+        return json({ created: result.created, skipped: result.skipped, exists: result.exists });
+      }
+
       if (method === "GET" && pathname === "/api/env") {
         const pid = Number(url.searchParams.get("pid"));
         if (!Number.isInteger(pid) || pid <= 1) return fail("pid required");
@@ -629,6 +692,26 @@ export function createHandler(deps: Deps): BoardHandler {
         const { services } = await snapshot();
         const used = services.flatMap((s) => s.ports);
         return json({ port: firstFreePort(used) });
+      }
+
+      if (method === "GET" && pathname === "/api/trace") {
+        const token = (url.searchParams.get("token") ?? "").trim();
+        if (!token) return fail("token required");
+        if (token.length > 200) return fail("token too long");
+        const ids = (url.searchParams.get("ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        if (!ids.length) return fail("ids required");
+        const groups = [];
+        for (const id of ids.slice(0, 50)) {
+          if (!isValidLogId(id) || !control.hasLog(id)) continue;
+          const { lines } = await control.tailLog(id, 5000);
+          const hits = [];
+          for (let i = 0; i < lines.length; i++) {
+            if (!lines[i].includes(token)) continue;
+            hits.push({ i, line: lines[i], level: classifyLine(lines[i]) });
+          }
+          if (hits.length) groups.push({ id, hits });
+        }
+        return json({ token, groups });
       }
 
       const logs = /^\/api\/logs\/([^/]+)$/.exec(pathname);

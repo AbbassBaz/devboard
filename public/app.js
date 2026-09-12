@@ -27,11 +27,19 @@ let addOpen = false;
 let toastText = "";
 let editingId = null;
 let editingProjectId = null;
+let restartAfterSave = null;
+let editingPresetId = null;
 let clock = nowClock();
 let toastTimer = 0;
 let lastLogSig = "";
+let trace = null;
+let jumpLine = null;
 
 try { sel = localStorage.getItem("devboard.sel"); } catch {}
+try {
+  const q = new URLSearchParams(location.search).get("sel");
+  if (q) saveSel(q);
+} catch {}
 
 function lastWtDir() {
   try { return localStorage.getItem("devboard.worktreesDir") || ""; } catch { return ""; }
@@ -112,6 +120,10 @@ function closeSheet() {
   hideSheets();
   editingId = null;
   editingProjectId = null;
+  editingPresetId = null;
+  restartAfterSave = null;
+  const note = $("#f-lossy-note");
+  if (note) note.hidden = true;
 }
 function openSheet(id) {
   closeMenu();
@@ -135,6 +147,144 @@ function splitLogLine(raw) {
   const m = LOG_TS.exec(text);
   return m ? { time: m[1].trim(), body: text.slice(m[0].length) } : { time: "", body: text };
 }
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const TRACEPARENT_RE = /\b[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}\b/gi;
+const REQ_ID_RE = /\breq[-_][a-z0-9][-a-z0-9]*/gi;
+const HEX_ID_RE = /\b[0-9a-f]{16,}\b/gi;
+const JSON_TRACE_KEYS = ["requestId", "reqId", "traceId", "trace_id", "correlationId", "x-request-id"];
+
+function jsonTraceIds(raw) {
+  const t = stripAnsi(raw).trim();
+  if (!(t.startsWith("{") && t.endsWith("}"))) return [];
+  try {
+    const v = JSON.parse(t);
+    if (!v || typeof v !== "object" || Array.isArray(v)) return [];
+    return JSON_TRACE_KEYS.map((k) => v[k]).filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+  } catch { return []; }
+}
+
+function findIds(raw) {
+  const text = stripAnsi(raw);
+  const out = [];
+  const add = (s) => { if (s && !out.includes(s)) out.push(s); };
+  for (const id of jsonTraceIds(text)) add(id);
+  const take = (re) => {
+    const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+    return [...text.matchAll(r)].map((m) => ({ value: m[0], start: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
+  };
+  const uuids = take(UUID_RE);
+  const tps = take(TRACEPARENT_RE);
+  for (const m of uuids) add(m.value);
+  for (const m of take(REQ_ID_RE)) add(m.value);
+  for (const m of tps) { add(m.value); add(m.value.split("-")[1] || ""); }
+  const covered = [...uuids, ...tps];
+  for (const m of take(HEX_ID_RE)) {
+    if (covered.some((c) => m.start >= c.start && m.end <= c.end)) continue;
+    add(m.value);
+  }
+  return out;
+}
+
+function clickableIds(raw) {
+  const json = jsonTraceIds(raw);
+  return findIds(raw).filter((t) =>
+    json.includes(t)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t)
+    || /^req[-_]/i.test(t)
+    || /^[0-9a-f]{16,}$/i.test(t)
+  );
+}
+
+function linkIds(text) {
+  const ids = clickableIds(text).slice().sort((a, b) => b.length - a.length);
+  if (!ids.length) return esc(text);
+  const spans = [];
+  for (const id of ids) {
+    let from = 0;
+    while (from < text.length) {
+      const i = text.indexOf(id, from);
+      if (i < 0) break;
+      spans.push({ start: i, end: i + id.length, id });
+      from = i + id.length;
+    }
+  }
+  spans.sort((a, b) => a.start - b.start || (b.end - a.end));
+  const kept = [];
+  let last = 0;
+  for (const s of spans) {
+    if (s.start < last) continue;
+    kept.push(s);
+    last = s.end;
+  }
+  let html = "";
+  let cur = 0;
+  for (const s of kept) {
+    html += esc(text.slice(cur, s.start));
+    html += `<button type="button" class="log-id" data-token="${esc(s.id)}">${esc(s.id)}</button>`;
+    cur = s.end;
+  }
+  return html + esc(text.slice(cur));
+}
+
+function defaultTraceIds() {
+  const s = selected();
+  if (s?.id) {
+    const p = projects.find((x) => x.memberIds.includes(s.id));
+    if (p?.memberIds.length) return [...p.memberIds];
+  }
+  return latest.filter((x) => x.kind === "dev" && x.status === "running" && !x.hidden && x.id).map((x) => x.id);
+}
+
+function closeTrace() {
+  if (!trace) return;
+  trace = null;
+  lastLogSig = "";
+  paintLog();
+}
+
+async function openTrace(token) {
+  if (!token) return;
+  follow = false;
+  trace = { token, groups: [], loading: true };
+  lastLogSig = "";
+  paintLog();
+  const ids = defaultTraceIds();
+  if (!ids.length && selected()?.id) ids.push(selected().id);
+  if (!ids.length) {
+    trace = { token, groups: [], loading: false, error: "no services to search" };
+    lastLogSig = "";
+    paintLog();
+    return;
+  }
+  try {
+    const q = new URLSearchParams({ token, ids: ids.join(",") });
+    const data = await api("GET", `/api/trace?${q}`);
+    trace = { token, groups: data.groups || [], loading: false };
+  } catch (e) {
+    trace = { token, groups: [], loading: false, error: e.message };
+  }
+  lastLogSig = "";
+  paintLog();
+}
+
+async function jumpToHit(id, i) {
+  trace = null;
+  follow = false;
+  jumpLine = i;
+  if (sel !== id) {
+    saveSel(id);
+    errCursor = null;
+    lastLogSig = "";
+    paintList();
+  } else {
+    lastLogSig = "";
+  }
+  await fetchLog(id, 5000);
+  lastLogSig = "";
+  paintLog();
+  document.getElementById(`log-${id}-${i}`)?.scrollIntoView({ block: "center" });
+}
+
 function formatLogTime(t) {
   if (!t) return "";
   const iso = Date.parse(t);
@@ -408,6 +558,17 @@ function paintLogTools(s) {
   const errIdx = raw.map((l, i) => (isLogErr(l) ? i : -1)).filter((i) => i >= 0);
   const shown = shownLogs(s);
   const chip = $("#errChip");
+  const tracing = !!trace;
+  $("#logFilter").hidden = tracing;
+  $("#traceClose").hidden = !tracing;
+  if (tracing) {
+    chip.hidden = true;
+    $("#followBtn").hidden = true;
+    const n = (trace.groups || []).reduce((sum, g) => sum + g.hits.length, 0);
+    $("#logCount").textContent = trace.loading ? "tracing…" : `${n} hit${n === 1 ? "" : "s"}`;
+    $("#logCount").title = trace.token;
+    return;
+  }
   chip.hidden = !s || errIdx.length === 0;
   chip.classList.toggle("on", errOnly);
   if (errIdx.length) {
@@ -424,8 +585,51 @@ function paintLogTools(s) {
   $("#logCount").title = s ? `~/.devboard/logs/${s.id}.log` : "";
 }
 
+function paintTraceBody() {
+  const body = $("#logBody");
+  if (trace.loading) {
+    body.innerHTML = `<div class="empty"><span>Tracing ${esc(trace.token)}…</span></div>`;
+    return;
+  }
+  if (trace.error) {
+    body.innerHTML = `<div class="empty"><span>${esc(trace.error)}</span></div>`;
+    return;
+  }
+  const groups = trace.groups || [];
+  if (!groups.length) {
+    body.innerHTML = `<div class="empty"><span>No hits for ${esc(trace.token)} in the current logs. Services have to print the same id; there is no time-window fallback.</span></div>`;
+    return;
+  }
+  const nameOf = (id) => latest.find((x) => x.id === id)?.name || id;
+  const chips = groups.map((g) =>
+    `<button type="button" class="trace-chip" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${g.hits[0].i}">${esc(nameOf(g.id))} · ${g.hits.length}</button>`
+  ).join("");
+  const blocks = groups.map((g) => {
+    const hits = g.hits.map((h) => {
+      const { time, body: rest } = splitLogLine(h.line);
+      const kind = lineKind(h.level, h.line);
+      const t = formatLogTime(time);
+      const display = rest || stripAnsi(h.line);
+      return `<div class="log-line ${kind}" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${h.i}" title="Open this log at this line">
+      <span class="ln">${h.i + 1}</span>
+      ${t ? `<span class="t">${esc(t)}</span>` : ""}
+      <span>${linkIds(display)}</span>
+    </div>`;
+    }).join("");
+    return `<div class="trace-group"><div class="trace-svc">${esc(nameOf(g.id))}</div>${hits}</div>`;
+  }).join("");
+  body.innerHTML = `<div class="trace"><div class="trace-head"><span class="trace-tok">${esc(trace.token)}</span>${chips}</div>${blocks}</div>`;
+}
+
 function paintLogBody(s) {
   const body = $("#logBody");
+  if (trace) {
+    const sig = ["trace", trace.token, trace.loading, trace.error || "", (trace.groups || []).length].join("|");
+    if (sig === lastLogSig) return;
+    lastLogSig = sig;
+    paintTraceBody();
+    return;
+  }
   if (!s) {
     body.innerHTML = `<div class="empty">Select a server to read its output.</div>`;
     lastLogSig = "";
@@ -435,7 +639,7 @@ function paintLogBody(s) {
   const shown = shownLogs(s);
   const unmanaged = s.status === "running" && !s.hasLog && !raw.length;
   const filteredEmpty = raw.length && !shown.length;
-  const sig = [s.id, raw.length, logText(raw.at(-1) ?? ""), logFilter, errOnly, errCursor, s.status, rowState(s), follow].join("|");
+  const sig = [s.id, raw.length, logText(raw.at(-1) ?? ""), logFilter, errOnly, errCursor, jumpLine, s.status, rowState(s), follow].join("|");
   if (sig === lastLogSig) {
     if (follow) body.scrollTop = body.scrollHeight;
     return;
@@ -467,10 +671,12 @@ function paintLogBody(s) {
     const kind = lineKind(l.level, l.text);
     const t = formatLogTime(time);
     const display = (rest || l.text) || l.text;
-    return `<div class="log-line ${kind}${errCursor === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
+    const tid = jsonTraceIds(l.raw)[0];
+    return `<div class="log-line ${kind}${errCursor === l.i || jumpLine === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
       <span class="ln">${l.i + 1}</span>
       ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
-      <span>${esc(display)}</span>
+      ${tid ? `<span class="log-tid" title="request id">${esc(tid)}</span>` : ""}
+      <span>${linkIds(display)}</span>
     </div>`;
   }).join("") + (rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "");
 
@@ -497,6 +703,8 @@ function select(id) {
   if (!id || sel === id) { saveSel(id); paintList(); return; }
   saveSel(id);
   errCursor = null;
+  jumpLine = null;
+  if (trace) { trace = null; }
   lastLogSig = "";
   paintList();
   paintLog();
@@ -564,6 +772,11 @@ async function restart(s) {
     await api("POST", "/api/restart", s.rootPid ? { rootPid: s.rootPid } : { id: s.id });
   } catch (e) {
     clearBusy(s.id);
+    if (e.status === 409 && /confirmation/i.test(e.message)) {
+      restartAfterSave = s;
+      await openEdit(s, { lossy: true });
+      return;
+    }
     toast(e.message);
   }
   refresh();
@@ -600,12 +813,13 @@ function toggleAdd() {
   if (addOpen) {
     $("#addForm").reset();
     $("#a-suggest").hidden = true;
+    $("#a-import").hidden = true;
     $("#addError").textContent = "";
     $("#a-name").focus();
   }
 }
 
-async function openEdit(s) {
+async function openEdit(s, opts = {}) {
   editingId = s.id;
   const f = $("#editForm");
   f.reset();
@@ -618,7 +832,8 @@ async function openEdit(s) {
   f.elements.envText.value = formatEnv(s.env);
   f.elements.restartOnCrash.checked = !!s.restartOnCrash;
   $("#formTitle").textContent = `Edit ${s.name}`;
-  $("#formError").textContent = "";
+  $("#f-lossy-note").hidden = !opts.lossy;
+  $("#formError").textContent = opts.lossy ? "Check quoting before this restart runs." : "";
   loadSuggest(s.cwd, "#f-suggest", "#f-cmd", "#f-port");
   openSheet("sheet-edit");
   if (s.pinned && s.id) {
@@ -658,17 +873,30 @@ function paintProjectList() {
   </div>`).join("");
 }
 
-function openPresetForm() {
+function openPresetForm(p) {
   const f = $("#presetForm");
   f.reset();
+  const selected = new Set(p?.serviceIds ?? []);
   const dev = latest.filter((s) => s.kind === "dev" && !s.hidden && s.id);
   $("#pr-services").innerHTML = dev.length
-    ? dev.map((s) => `<label class="check"><input type="checkbox" name="serviceId" value="${esc(s.id)}" ${s.status === "running" ? "checked" : ""}> ${esc(s.name)} <span class="mono">:${s.ports[0] ?? "—"}</span></label>`).join("")
+    ? dev.map((s) => `<label class="check"><input type="checkbox" name="serviceId" value="${esc(s.id)}" ${p ? selected.has(s.id) : s.status === "running" ? "checked" : ""}> ${esc(s.name)} <span class="mono">:${s.ports[0] ?? "—"}</span></label>`).join("")
     : `<p class="empty-note">Pin a server first, then save it here.</p>`;
-  f.elements.urls.value = dev.filter((s) => s.status === "running" && s.ports[0]).map((s) => `http://127.0.0.1:${s.ports[0]}`).join("\n");
+  if (p) {
+    f.elements.name.value = p.name;
+    f.elements.urls.value = (p.urls ?? []).join("\n");
+    f.elements.worktree.value = p.worktree ?? "";
+    f.elements.openEditor.checked = !!p.openEditor;
+    $("#presetFormTitle").textContent = `Edit ${p.name}`;
+    $("#presetSubmit").textContent = "Save changes";
+  } else {
+    f.elements.urls.value = dev.filter((s) => s.status === "running" && s.ports[0]).map((s) => `http://127.0.0.1:${s.ports[0]}`).join("\n");
+    $("#presetFormTitle").textContent = "Save a preset";
+    $("#presetSubmit").textContent = "Save preset";
+  }
   $("#presetError").textContent = "";
   paintPresets();
   openSheet("sheet-preset");
+  editingPresetId = p ? p.id : null;
 }
 
 function paintPresets() {
@@ -681,6 +909,7 @@ function paintPresets() {
     <strong>${esc(p.name)}</strong>
     <span class="mono">${p.serviceIds.length} servers</span>
     <button type="button" data-act="preset-run">Resume</button>
+    <button type="button" data-act="preset-edit">Edit</button>
     <button type="button" data-act="preset-del" class="danger">Remove</button>
   </div>`).join("");
 }
@@ -722,13 +951,14 @@ function paintWt() {
     ].join(" ");
     const ports = w.ports.map((p) => `<a href="http://localhost:${p}" target="_blank" rel="noopener">:${p}</a>`).join(" ");
     return `<article class="wt-card" data-path="${esc(w.path)}">
-      <div class="badge">${esc(w.branch || "detached")} · ${w.diskMb} MB</div>
+      <div class="badge">${esc(w.branch || "detached")} · ${w.diskMb == null ? "…" : `${w.diskMb} MB`}</div>
       <div class="name">${esc(name)}</div>
       <div class="path" title="${esc(w.path)}">${esc(home(w.path))}</div>
       <div>${tags} ${ports || '<span class="mono">no servers</span>'}</div>
       <div class="wt-acts">
         <button type="button" data-act="wt-open" data-path="${esc(w.path)}">Open</button>
         <button type="button" data-act="wt-launch" data-path="${esc(w.path)}">Launch</button>
+        ${w.hasTemplate ? `<button type="button" data-act="wt-import" data-path="${esc(w.path)}">Import pins</button>` : ""}
         ${w.main ? "" : `<button type="button" data-act="wt-retire" class="danger" data-path="${esc(w.path)}" data-dirty="${w.dirty ? "1" : ""}" data-locked="${w.locked ? "1" : ""}">Retire</button>`}
       </div>
     </article>`;
@@ -783,14 +1013,18 @@ async function loadAttention() {
   }
 }
 
-async function fetchLog(id) {
+async function fetchLog(id, n = 4000) {
   if (!id) return;
   const s = latest.find((x) => x.id === id);
   if (!s?.hasLog) return;
   try {
-    const { lines, levels } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=4000`);
+    const { lines, levels } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=${n}`);
     logs[id] = (lines || []).map((text, i) => ({ text, level: levels?.[i] || "other" }));
-    if (id === sel) { lastLogSig = ""; paintLog(); }
+    if (id === sel) {
+      if (trace) return;
+      lastLogSig = "";
+      paintLog();
+    }
     else { paintChrome(); paintList(); }
   } catch {}
 }
@@ -813,15 +1047,18 @@ document.addEventListener("click", async (ev) => {
   if (menu && !ev.target.closest(".menu") && !ev.target.closest("#moreBtn") && !ev.target.closest("#logMenuBtn")) closeMenu();
   if (ev.target.closest("a[href]")) return;
 
+  const idBtn = ev.target.closest(".log-id");
+  if (idBtn?.dataset.token) { openTrace(idBtn.dataset.token); return; }
+
   const line = ev.target.closest(".log-line");
-  if (line && !ev.target.closest("button")) {
+  if (line && !ev.target.closest("button") && line.dataset.act !== "trace-jump") {
     const s = selected();
     const rec = logText((logs[s?.id] || [])[Number(line.dataset.i)]);
     if (rec) copy(stripAnsi(rec).replace(LOG_TS, "").trim() || stripAnsi(rec));
     return;
   }
 
-  const btn = ev.target.closest("button[data-act], [data-act=select]");
+  const btn = ev.target.closest("button[data-act], [data-act=select], [data-act=trace-jump]");
   if (!btn) return;
   const act = btn.dataset.act;
   const holder = btn.closest("[data-id]");
@@ -834,6 +1071,12 @@ document.addEventListener("click", async (ev) => {
     return;
   }
   if (act === "close-sheet") { closeSheet(); return; }
+  if (act === "close-trace") { closeTrace(); return; }
+  if (act === "trace-jump") {
+    const i = Number(btn.dataset.i);
+    if (id && Number.isInteger(i) && i >= 0) jumpToHit(id, i);
+    return;
+  }
   if (act === "start-all") { switchAll(true); return; }
   if (act === "stop-all") { switchAll(false); return; }
   if (act === "sheet-worktrees") {
@@ -925,6 +1168,13 @@ document.addEventListener("click", async (ev) => {
       await scanWt();
     }
     else if (act === "wt-open") await api("POST", "/api/open", { path: btn.dataset.path });
+    else if (act === "wt-import") {
+      const result = await api("POST", "/api/import", { dir: btn.dataset.path });
+      const n = (result.created ?? []).length;
+      toast(n ? `Imported ${n} pin${n === 1 ? "" : "s"} from devboard.json` : "Nothing new to import");
+      await scanWt();
+      refresh();
+    }
     else if (act === "wt-launch") {
       const result = await api("POST", "/api/worktrees/launch", { path: btn.dataset.path });
       for (const err of result.errors ?? []) toast(`${err.id}: ${err.error}`);
@@ -1029,6 +1279,9 @@ document.addEventListener("click", async (ev) => {
         try { window.open(url, "_blank", "noopener"); } catch {}
       }
     }
+    else if (act === "preset-edit") {
+      openPresetForm(presets.find((x) => x.id === id));
+    }
     else if (act === "preset-del") {
       if (!confirm(`Remove preset ${holder?.dataset.id}?`)) return;
       await api("DELETE", `/api/presets/${encodeURIComponent(id)}`);
@@ -1066,7 +1319,35 @@ $("#logBody").addEventListener("scroll", () => {
 });
 $("#overlay").addEventListener("click", (ev) => { if (ev.target === $("#overlay")) closeSheet(); });
 
-$("#a-cwd").addEventListener("blur", () => loadSuggest($("#a-cwd").value, "#a-suggest", "#a-cmd", "#a-port"));
+async function loadImport(dir) {
+  const btn = $("#a-import");
+  if (!dir?.trim()) { btn.hidden = true; return; }
+  try {
+    const data = await api("GET", `/api/import?dir=${encodeURIComponent(dir.trim())}`);
+    if (!data.exists || !data.importable) { btn.hidden = true; return; }
+    btn.hidden = false;
+    btn.textContent = data.importable === 1 ? "Import 1 pin" : `Import ${data.importable} pins`;
+  } catch {
+    btn.hidden = true;
+  }
+}
+
+$("#a-cwd").addEventListener("blur", () => {
+  loadSuggest($("#a-cwd").value, "#a-suggest", "#a-cmd", "#a-port");
+  loadImport($("#a-cwd").value);
+});
+$("#a-import").onclick = async () => {
+  const dir = $("#a-cwd").value;
+  try {
+    const result = await api("POST", "/api/import", { dir });
+    const n = (result.created ?? []).length;
+    toast(n ? `Imported ${n} pin${n === 1 ? "" : "s"} from devboard.json` : "Nothing new to import");
+    await loadImport(dir);
+    refresh();
+  } catch (e) {
+    $("#addError").textContent = e.message;
+  }
+};
 $("#f-cwd").addEventListener("blur", () => loadSuggest($("#f-cwd").value, "#f-suggest", "#f-cmd", "#f-port"));
 function bindSuggest(box) {
   box.addEventListener("click", (ev) => {
@@ -1099,8 +1380,17 @@ $("#editForm").onsubmit = async (ev) => {
   const data = Object.fromEntries(new FormData(f));
   const body = { name: data.name, cwd: data.cwd, command: data.command, port: Number(data.port), healthUrl: data.healthUrl, envText: data.envText, restartOnCrash: f.elements.restartOnCrash.checked };
   try {
-    await api("PUT", `/api/pinned/${encodeURIComponent(editingId)}`, body);
+    const pending = restartAfterSave;
+    let id = editingId;
+    if (pending && !pending.pinned) {
+      const created = await api("POST", "/api/pinned", body);
+      id = created.pinned?.id ?? id;
+    } else {
+      await api("PUT", `/api/pinned/${encodeURIComponent(editingId)}`, body);
+    }
+    restartAfterSave = null;
     closeSheet();
+    if (pending) await api("POST", "/api/restart", { id });
     refresh();
   } catch (e) { $("#formError").textContent = e.message; }
 };
@@ -1121,14 +1411,17 @@ $("#presetForm").onsubmit = async (ev) => {
   const f = ev.target;
   const data = Object.fromEntries(new FormData(f));
   const serviceIds = [...f.querySelectorAll("input[name=serviceId]:checked")].map((el) => el.value);
+  const body = {
+    name: data.name,
+    serviceIds,
+    urls: data.urls,
+    worktree: data.worktree || undefined,
+    openEditor: f.elements.openEditor.checked,
+  };
   try {
-    await api("POST", "/api/presets", {
-      name: data.name,
-      serviceIds,
-      urls: data.urls,
-      worktree: data.worktree || undefined,
-      openEditor: f.elements.openEditor.checked,
-    });
+    if (editingPresetId) await api("PUT", `/api/presets/${encodeURIComponent(editingPresetId)}`, body);
+    else await api("POST", "/api/presets", body);
+    editingPresetId = null;
     f.reset();
     await refresh();
     openPresetForm();
@@ -1160,6 +1453,7 @@ document.addEventListener("keydown", (ev) => {
     if (typing) { ev.target.blur(); return; }
     if (menu) { closeMenu(); return; }
     if (overlayOpen()) { closeSheet(); return; }
+    if (trace) { closeTrace(); return; }
     if (addOpen) { addOpen = false; $("#addForm").hidden = true; }
     return;
   }

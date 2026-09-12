@@ -42,6 +42,7 @@ export function mergeServices(
       ports: r.ports,
       cwd: r.cwd,
       command: r.command,
+      ...(r.commandLossy ? { commandLossy: true } : {}),
       uptime: r.uptime,
       cpu: r.cpu,
       memMb: r.memMb,

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Registry, pinnedId, slugify } from "../lib/registry";
+import { Registry, pinnedId, slugify, uniquePinnedId } from "../lib/registry";
 import type { RunningService } from "../lib/types";
 
 const running: RunningService = {
@@ -26,6 +26,11 @@ describe("ids", () => {
   test("pinnedId appends the port", () => {
     expect(pinnedId("@acme/proxy", 3000)).toBe("acme-proxy-3000");
   });
+  test("uniquePinnedId suffixes on collision", () => {
+    expect(uniquePinnedId("web-3000", [])).toBe("web-3000");
+    expect(uniquePinnedId("web-3000", ["web-3000"])).toBe("web-3000-2");
+    expect(uniquePinnedId("web-3000", ["web-3000", "web-3000-2"])).toBe("web-3000-3");
+  });
 });
 
 describe("Registry", () => {
@@ -33,35 +38,50 @@ describe("Registry", () => {
     expect(await registry.load()).toEqual([]);
   });
 
-  test("pin saves name, cwd, command and first port; pinning again replaces", async () => {
+  test("pin saves name, cwd, command and first port; pinning the same row twice leaves one entry", async () => {
     const pinned = await registry.pin(running);
     expect(pinned).toEqual({
       id: "acme-proxy-3000", name: "@acme/proxy",
       cwd: running.cwd, command: running.command, port: 3000,
     });
-    await registry.pin(running, "Core Proxy");
-    const list = await registry.load();
-    expect(list).toHaveLength(2); // different name => different id
-    expect(list.map((p) => p.id).sort()).toEqual(["acme-proxy-3000", "core-proxy-3000"]);
-    await registry.pin(running);
-    expect(await registry.load()).toHaveLength(2); // same id replaced, not duplicated
+    const renamed = await registry.pin(running, "Core Proxy");
+    expect(renamed).toEqual({
+      id: "acme-proxy-3000", name: "Core Proxy",
+      cwd: running.cwd, command: running.command, port: 3000,
+    });
+    expect(await registry.load()).toHaveLength(1);
   });
 
-  test("add stores a hand-entered service and replaces one with the same id", async () => {
+  test("add stores a hand-entered service and replaces one with the same cwd and port", async () => {
     const added = await registry.add({ name: "Docs", cwd: "/tmp", command: "pnpm dev", port: 3010 });
     expect(added).toEqual({ id: "docs-3010", name: "Docs", cwd: "/tmp", command: "pnpm dev", port: 3010 });
     await registry.add({ name: "Docs", cwd: "/tmp", command: "pnpm dev --turbo", port: 3010 });
     const list = await registry.load();
     expect(list).toHaveLength(1);
-    expect(list[0].command).toBe("pnpm dev --turbo");
+    expect(list[0]).toMatchObject({ id: "docs-3010", command: "pnpm dev --turbo" });
   });
 
-  test("replace edits in place, renames the id when name or port change, and reports unknown ids", async () => {
+  test("two web:3000 pins in different folders keep both ids", async () => {
+    const a = await registry.add({ name: "web", cwd: "/repo/a", command: "npm run dev", port: 3000 });
+    const b = await registry.add({ name: "web", cwd: "/repo/b", command: "npm run dev", port: 3000 });
+    expect(a.id).toBe("web-3000");
+    expect(b.id).toBe("web-3000-2");
+    expect((await registry.load()).map((p) => p.id).sort()).toEqual(["web-3000", "web-3000-2"]);
+  });
+
+  test("replace edits in place, keeps the id, and reports unknown ids", async () => {
     await registry.add({ name: "Docs", cwd: "/tmp", command: "pnpm dev", port: 3010 });
     const edited = await registry.replace("docs-3010", { name: "Docs Site", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
-    expect(edited).toEqual({ id: "docs-site-3011", name: "Docs Site", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
-    expect((await registry.load()).map((p) => p.id)).toEqual(["docs-site-3011"]);
-    expect(await registry.replace("docs-3010", { name: "x", cwd: "/tmp", command: "true", port: 1 })).toBeUndefined();
+    expect(edited).toEqual({ id: "docs-3010", name: "Docs Site", cwd: "/tmp", command: "pnpm dev --turbo", port: 3011 });
+    expect((await registry.load()).map((p) => p.id)).toEqual(["docs-3010"]);
+    expect(await registry.replace("missing", { name: "x", cwd: "/tmp", command: "true", port: 1 })).toBeUndefined();
+  });
+
+  test("an existing services.json loads unchanged", async () => {
+    const raw = '[\n  {\n    "id": "custom-id",\n    "name": "web",\n    "cwd": "/old",\n    "command": "true",\n    "port": 3000\n  }\n]\n';
+    writeFileSync(registry.path, raw);
+    expect(await registry.load()).toEqual([{ id: "custom-id", name: "web", cwd: "/old", command: "true", port: 3000 }]);
+    expect(await Bun.file(registry.path).text()).toBe(raw);
   });
 
   test("pin rejects a service with no cwd", async () => {
@@ -110,11 +130,16 @@ describe("Registry", () => {
     expect((await registry.loadProjects()).find((p) => p.id === "hub")!.memberIds).toEqual(["api-1"]);
   });
 
-  test("renaming a pinned service keeps it in its project", async () => {
+  test("renaming a pinned service keeps its id, project, hide state, and preset", async () => {
     await registry.add({ name: "api", cwd: "/tmp/a", command: "true", port: 1 });
     await registry.addProject({ name: "Hub", memberIds: ["api-1"] });
+    await registry.setIgnored("api-1", true);
+    await registry.addPreset({ name: "Api", serviceIds: ["api-1"], urls: [] });
     await registry.replace("api-1", { name: "core-api", cwd: "/tmp/a", command: "true", port: 1 });
-    expect((await registry.loadProjects())[0].memberIds).toEqual(["core-api-1"]);
+    expect((await registry.loadProjects())[0].memberIds).toEqual(["api-1"]);
+    expect((await registry.load())[0]).toMatchObject({ id: "api-1", name: "core-api" });
+    expect([...(await registry.loadIgnored())]).toEqual(["api-1"]);
+    expect((await registry.loadPresets())[0].serviceIds).toEqual(["api-1"]);
   });
 
   test("presets persist and can be replaced by the same name", async () => {
@@ -129,6 +154,13 @@ describe("Registry", () => {
     expect((await registry.loadPresets()).map((p) => p.serviceIds)).toEqual([["web-3001"]]);
     expect(await registry.deletePreset("frontend-only")).toBe(true);
     expect(await registry.deletePreset("frontend-only")).toBe(false);
+  });
+
+  test("replacePreset keeps the id when the name changes", async () => {
+    await registry.addPreset({ name: "Stack", serviceIds: ["a"], urls: [] });
+    const edited = await registry.replacePreset("stack", { name: "Full stack", serviceIds: ["a", "b"], urls: ["http://127.0.0.1:3000"] });
+    expect(edited).toMatchObject({ id: "stack", name: "Full stack", serviceIds: ["a", "b"] });
+    expect(await registry.replacePreset("missing", { name: "x", serviceIds: [], urls: [] })).toBeUndefined();
   });
 
   test("a non-array services.json loads as [] and is left untouched", async () => {

@@ -34,7 +34,7 @@ api() {
 }
 row() { api GET /api/services | bun -e 'const b = await new Response(Bun.stdin).json(); const s = b.services.find(s => s.ports.includes(3999)); console.log("    " + (s ? JSON.stringify({status:s.status,name:s.name,kind:s.kind,rootPid:s.rootPid,pids:s.pids,pinned:s.pinned,hasLog:s.hasLog,id:s.id}) : "no row for 3999"));'; }
 rootpid() { api GET /api/services | bun -e 'const b = await new Response(Bun.stdin).json(); console.log(b.services.find(s => s.ports.includes(3999) && s.status === "running")?.rootPid ?? "")'; }
-waitfor() { for _ in $(seq 1 50); do eval "$1" >/dev/null 2>&1 && return 0; sleep 0.1; done; echo "    TIMEOUT waiting: $1"; ok=0; return 1; }
+waitfor() { for _ in $(seq 1 100); do eval "$1" >/dev/null 2>&1 && return 0; sleep 0.1; done; echo "    TIMEOUT waiting: $1"; ok=0; return 1; }
 check() { if eval "$1"; then echo "    ✓ $2"; else echo "    ✗ $2"; ok=0; fi; }
 
 echo "[1] start devboard"
@@ -47,12 +47,13 @@ waitfor "curl -sf http://127.0.0.1:4242/api/services"
 
 echo "[2] start a throwaway server the way a terminal would (sh -c '...; exit 0' keeps sh as the tree root)"
 sh -c "bun -e 'Bun.serve({port:3999,fetch(){return new Response(\"hi\")}});setInterval(()=>{},1e6)'; exit 0" & TERM_SH=$!
-waitfor "curl -sf http://127.0.0.1:3999"; sleep 0.3
-
-echo "[3] row appears"; row
+waitfor "curl -sf http://127.0.0.1:3999"
+echo "[3] row appears"
+waitfor "[ -n \"\$(rootpid)\" ]"
+row
 ROOT=$(rootpid); check "[ '$ROOT' = '$TERM_SH' ]" "root pid is the terminal's sh ($TERM_SH)"
 
-echo "[4] pin"; api POST /api/pin "{\"rootPid\":$ROOT}"; echo
+echo "[4] pin"; bun run bin/devboard.ts pin 3999; echo
 check "grep -q '\"id\": \"devboard-3999\"' '$DEVBOARD_HOME/services.json'" "services.json has devboard-3999"
 
 echo "[5] kill"; api POST /api/kill "{\"rootPid\":$ROOT}"; echo
@@ -88,6 +89,14 @@ api POST /api/kill "{\"rootPid\":$NEW}"; echo; api DELETE /api/pin/devboard-3999
 STARTED=
 waitfor "! curl -sf http://127.0.0.1:3999"; sleep 0.3; row
 check "! api GET /api/services | grep -q '3999'" "row gone after kill + unpin"
+
+echo "[9] CLI add, ls --json, open, rm, doctor"
+bun run bin/devboard.ts add smoke-cli "$PWD" "true" 3998
+bun run bin/devboard.ts ls --json | bun -e 'const d = await new Response(Bun.stdin).json(); if (!Array.isArray(d) || !d.some(s => s.id === "smoke-cli-3998")) { console.error("ls --json missing smoke-cli-3998"); process.exit(1); }'
+bun run bin/devboard.ts open smoke-cli-3998 >/dev/null
+bun run bin/devboard.ts rm smoke-cli-3998
+check "! grep -q smoke-cli-3998 '$DEVBOARD_HOME/services.json'" "CLI add/rm round-trip"
+if bun run bin/devboard.ts doctor; then echo "    ✓ doctor exits 0"; else echo "    ✗ doctor exits 0"; ok=0; fi
 
 echo "[poll cost] $( { /usr/bin/time -p curl -s -o /dev/null http://127.0.0.1:4242/api/services; } 2>&1 | grep real )"
 kill -TERM "$DB" 2>/dev/null; wait "$DB" 2>/dev/null; DB=

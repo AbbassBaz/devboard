@@ -106,11 +106,30 @@ describe("POST /api/pinned (hand-entered server)", () => {
     await registry.save([{ id: "dash-3001", name: "dash", cwd: home, command: "npm exec next dev --port 3001", port: 3001 }]);
     const res = await call("PUT", "/api/pinned/dash-3001", { name: "dashboard", cwd: home, command: "npm exec -- next dev --port 3001", port: 3001 });
     expect(res.status).toBe(200);
-    expect((await res.json()).pinned).toEqual({ id: "dashboard-3001", name: "dashboard", cwd: home, command: "npm exec -- next dev --port 3001", port: 3001 });
-    expect((await registry.load()).map((p) => p.id)).toEqual(["dashboard-3001"]);
-    expect((await call("PUT", "/api/pinned/dash-3001", { name: "x", cwd: home, command: "true", port: 1 })).status).toBe(404);
-    expect((await call("PUT", "/api/pinned/dashboard-3001", { name: "x", cwd: home, command: "true", port: 0 })).status).toBe(400);
+    expect((await res.json()).pinned).toEqual({ id: "dash-3001", name: "dashboard", cwd: home, command: "npm exec -- next dev --port 3001", port: 3001 });
+    expect((await registry.load()).map((p) => p.id)).toEqual(["dash-3001"]);
+    expect((await call("PUT", "/api/pinned/missing", { name: "x", cwd: home, command: "true", port: 1 })).status).toBe(404);
+    expect((await call("PUT", "/api/pinned/dash-3001", { name: "x", cwd: home, command: "true", port: 0 })).status).toBe(400);
     await registry.save([]);
+  });
+
+  test("two web:3000 pins in different folders start independently", async () => {
+    running = [];
+    const a = join(home, "web-a");
+    const b = join(home, "web-b");
+    mkdirSync(a);
+    mkdirSync(b);
+    const first = await call("POST", "/api/pinned", { name: "web", cwd: a, command: "echo a; exit 0", port: 3000 });
+    const second = await call("POST", "/api/pinned", { name: "web", cwd: b, command: "echo b; exit 0", port: 3000 });
+    expect((await first.json()).pinned.id).toBe("web-3000");
+    expect((await second.json()).pinned.id).toBe("web-3000-2");
+    const startA = await call("POST", "/api/start", { id: "web-3000" });
+    const startB = await call("POST", "/api/start", { id: "web-3000-2" });
+    expect(startA.status).toBe(200);
+    expect(startB.status).toBe(200);
+    spawned.push((await startA.json()).pid, (await startB.json()).pid);
+    await registry.unpin("web-3000");
+    await registry.unpin("web-3000-2");
   });
 
   test("rejects missing fields, bad ports and folders that do not exist", async () => {
@@ -200,6 +219,13 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     expect((await call("POST", "/api/restart", { rootPid: 64672 })).status).toBe(400);
   });
 
+  test("restart of an unmanaged lossy command needs confirm", async () => {
+    running = [{ ...docs, command: `bun -e 'console.log("a b")'`, commandLossy: true }];
+    const denied = await call("POST", "/api/restart", { rootPid: 64672 });
+    expect(denied.status).toBe(409);
+    expect((await denied.json()).error).toBe("command needs confirmation");
+  });
+
   test("logs 404 for an unknown id and the unknown route 404s", async () => {
     expect((await call("GET", "/api/logs/nothing-here")).status).toBe(404);
     expect((await call("GET", "/api/whatever")).status).toBe(404);
@@ -247,6 +273,24 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     expect(get.status).toBe(400);
     expect(del.status).toBe(400);
     expect(await Bun.file(outside).text()).toBe("leave me alone\n");
+  });
+
+  test("GET /api/trace groups matching lines by service id", async () => {
+    const uuid = "550e8400-e29b-41d4-a716-446655440000";
+    mkdirSync(control.logDir, { recursive: true });
+    writeFileSync(control.logPath("web-3000"), `ready\nGET / click ${uuid}\n`);
+    writeFileSync(control.logPath("api-3001"), `{"requestId":"${uuid}","msg":"load"}\n`);
+    writeFileSync(control.logPath("worker-3004"), `job ${uuid} done\nnoise\n`);
+    const res = await call("GET", `/api/trace?token=${uuid}&ids=web-3000,api-3001,worker-3004`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.token).toBe(uuid);
+    expect(body.groups.map((g: { id: string }) => g.id)).toEqual(["web-3000", "api-3001", "worker-3004"]);
+    expect(body.groups[0].hits).toEqual([{ i: 1, line: `GET / click ${uuid}`, level: "other" }]);
+    expect(body.groups[1].hits[0]).toMatchObject({ i: 0, level: "other" });
+    expect(body.groups[2].hits).toEqual([{ i: 0, line: `job ${uuid} done`, level: "other" }]);
+    expect((await call("GET", "/api/trace")).status).toBe(400);
+    expect((await call("GET", `/api/trace?token=${uuid}`)).status).toBe(400);
   });
 });
 
@@ -436,6 +480,17 @@ describe("healthUrl, ports, presets and attention", () => {
     expect((await call("DELETE", "/api/presets/frontend-only")).status).toBe(200);
   });
 
+  test("PUT /api/presets/:id edits in place and 404s for unknown ids", async () => {
+    await call("POST", "/api/presets", { name: "Stack", serviceIds: ["echo-2"], urls: [] });
+    const edited = await call("PUT", "/api/presets/stack", { name: "Full stack", serviceIds: ["echo-2", "web-3000"], urls: ["http://127.0.0.1:3000"] });
+    expect(edited.status).toBe(200);
+    expect((await edited.json()).preset).toMatchObject({ id: "stack", name: "Full stack", serviceIds: ["echo-2", "web-3000"] });
+    const listed = await (await call("GET", "/api/services")).json();
+    expect(listed.presets.find((p: { id: string }) => p.id === "stack").serviceIds).toEqual(["echo-2", "web-3000"]);
+    expect((await call("PUT", "/api/presets/missing", { name: "x", serviceIds: [] })).status).toBe(404);
+    await call("DELETE", "/api/presets/stack");
+  });
+
   test("POST /api/pinned keeps env overrides and restart-on-crash", async () => {
     running = [];
     const res = await call("POST", "/api/pinned", {
@@ -460,6 +515,28 @@ describe("healthUrl, ports, presets and attention", () => {
     expect(res.status).toBe(200);
     expect((await res.json()).suggestions[0]).toMatchObject({ command: "pnpm dev", port: 5173 });
     expect((await call("GET", "/api/suggest")).status).toBe(400);
+  });
+
+  test("POST /api/import is idempotent and does not overwrite", async () => {
+    const dir = join(home, "tmpl-app");
+    mkdirSync(join(dir, "apps", "api"), { recursive: true });
+    writeFileSync(join(dir, "devboard.json"), JSON.stringify([
+      { name: "web", command: "bun run dev", port: 39100 },
+      { name: "api", command: "bun run --watch src/index.ts", port: 39101, cwd: "apps/api" },
+    ]));
+    const peek = await call("GET", `/api/import?dir=${encodeURIComponent(dir)}`);
+    expect(peek.status).toBe(200);
+    expect(await peek.json()).toMatchObject({ exists: true, importable: 2 });
+    const first = await call("POST", "/api/import", { dir });
+    expect(first.status).toBe(200);
+    const created = (await first.json()).created;
+    expect(created).toHaveLength(2);
+    expect(created.map((p: { id: string }) => p.id).sort()).toEqual(["api-39101", "web-39100"]);
+    const second = await call("POST", "/api/import", { dir });
+    expect((await second.json()).created).toHaveLength(0);
+    const web = (await registry.load()).find((p) => p.id === "web-39100");
+    expect(web).toMatchObject({ command: "bun run dev", port: 39100, cwd: dir });
+    expect((await call("GET", "/api/import")).status).toBe(400);
   });
 
   test("serves a self-hosted font", async () => {

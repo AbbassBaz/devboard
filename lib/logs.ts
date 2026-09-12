@@ -53,3 +53,61 @@ export function looksLikeJson(s: string): boolean {
   const t = stripAnsi(s).trim();
   return (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"));
 }
+
+export const JSON_TRACE_KEYS = ["requestId", "reqId", "traceId", "trace_id", "correlationId", "x-request-id"] as const;
+
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const TRACEPARENT_RE = /\b[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}\b/gi;
+const REQ_RE = /\breq[-_][a-z0-9][-a-z0-9]*/gi;
+const HEX_RE = /\b[0-9a-f]{16,}\b/gi;
+
+function allMatches(re: RegExp, text: string): { value: string; start: number; end: number }[] {
+  const out: { value: string; start: number; end: number }[] = [];
+  const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+  for (const m of text.matchAll(r)) {
+    const start = m.index ?? 0;
+    out.push({ value: m[0], start, end: start + m[0].length });
+  }
+  return out;
+}
+
+export function jsonTraceIds(raw: string): string[] {
+  if (!looksLikeJson(raw)) return [];
+  try {
+    const v = JSON.parse(stripAnsi(raw).trim()) as unknown;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return [];
+    const rec = v as Record<string, unknown>;
+    const out: string[] = [];
+    for (const key of JSON_TRACE_KEYS) {
+      const val = rec[key];
+      if (typeof val === "string" && val.trim()) out.push(val.trim());
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export function findIds(raw: string): string[] {
+  const text = stripAnsi(raw);
+  const out: string[] = [];
+  const add = (s: string) => {
+    if (s && !out.includes(s)) out.push(s);
+  };
+  for (const id of jsonTraceIds(text)) add(id);
+  const uuids = allMatches(UUID_RE, text);
+  const tps = allMatches(TRACEPARENT_RE, text);
+  const reqs = allMatches(REQ_RE, text);
+  for (const m of uuids) add(m.value);
+  for (const m of reqs) add(m.value);
+  for (const m of tps) {
+    add(m.value);
+    add(m.value.split("-")[1] ?? "");
+  }
+  const covered = [...uuids, ...tps];
+  for (const m of allMatches(HEX_RE, text)) {
+    if (covered.some((c) => m.start >= c.start && m.end <= c.end)) continue;
+    add(m.value);
+  }
+  return out;
+}
