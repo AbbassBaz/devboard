@@ -52,6 +52,8 @@ After install, any terminal:
 | `DEVBOARD_HOME` | `~/.devboard` | Pinned list, projects, presets, ignored ids, and logs |
 | `DEVBOARD_TRAY` | unset (on) | Set `0` to start the server without the menu bar extra |
 
+The menu bar extra reads `DevboardURL` from its Info.plist (default `http://127.0.0.1:4242`). Changing `PORT` or `DEVBOARD_URL` for an already-built tray needs `bun run tray:build` again.
+
 `~/.devboard` holds `services.json`, `projects.json`, `presets.json`, `ignored.json`, and `logs/<id>.log`. Files are re-read on every request, so hand edits work without a restart.
 
 ## Why
@@ -66,7 +68,7 @@ pm2 and Overmind supervise processes you handed them. Port-killer menu apps list
 - **Start / Restart.** Runs the saved command in its folder via `/bin/sh -c`, detached, output appended to `~/.devboard/logs/<id>.log`. Closing the board does not stop what it started. Optional restart-on-crash (5 tries, exponential backoff) relaunches a stopped server whose last log looks like an error. Stop and Kill disarm it.
 - **Logs.** Last 4000 lines, refreshed every 2 seconds. Filter, jump between errors, follow the tail. Files exist only for services the board started. While the board is running, each file is capped at 5 MB (last 2 MB kept in `<id>.log.1`).
 - **CLI.** `ls [--json]`, `add`, `rm`, `pin`, `open`, `start`, `stop`, `restart`, `logs [-f]`, `start-all`, `stop-all`, `doctor`, `up`, `tray`. `stop-all` pins unsaved running rows first, like the page. `doctor` reports bun, `lsof`/`ps`, who holds `:4242`, `~/.local/bin` on PATH, and the tray app.
-- **Menu bar.** Count of servers on, start/stop, open a port, open the board. Quitting the extra does not stop your servers.
+- **Menu bar.** Count of servers on, start/stop, open a port, open the board. Quitting the extra does not stop your servers. The tray bakes `DEVBOARD_URL` or `PORT` and the `package.json` version into Info.plist at `bun run tray:build`; rebuild to point it at another board.
 - **Projects, worktrees, presets, attention, env.** Group servers, inventory git checkouts, resume a named set, surface port conflicts and crashed pins, edit env overrides.
 
 The page layout, keys, and tokens live in `design.md`.

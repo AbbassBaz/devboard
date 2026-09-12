@@ -1,6 +1,15 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+VERSION="$(bun -e 'console.log(require("./package.json").version)')"
+if [ -n "${DEVBOARD_URL:-}" ]; then
+  BOARD_URL="${DEVBOARD_URL%/}"
+elif [ -n "${PORT:-}" ]; then
+  BOARD_URL="http://127.0.0.1:${PORT}"
+else
+  BOARD_URL="http://127.0.0.1:4242"
+fi
 cd "$ROOT/tray"
 swift build -c release
 BIN="$(swift build -c release --show-bin-path)/DevboardTray"
@@ -22,7 +31,7 @@ cat > "$DIST/Contents/Info.plist" <<EOF
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>${VERSION}</string>
   <key>CFBundleExecutable</key>
   <string>Devboard</string>
   <key>CFBundlePackageType</key>
@@ -35,6 +44,8 @@ cat > "$DIST/Contents/Info.plist" <<EOF
   <true/>
   <key>DevboardRoot</key>
   <string>${ROOT}</string>
+  <key>DevboardURL</key>
+  <string>${BOARD_URL}</string>
 </dict>
 </plist>
 EOF

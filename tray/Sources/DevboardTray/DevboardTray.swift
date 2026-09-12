@@ -22,6 +22,19 @@ struct Snapshot: Decodable {
   var services: [Service]
 }
 
+enum BoardConfig {
+  static var url: String {
+    let raw = (Bundle.main.object(forInfoDictionaryKey: "DevboardURL") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let base = raw.isEmpty ? "http://127.0.0.1:4242" : raw
+    return base.hasSuffix("/") ? String(base.dropLast()) : base
+  }
+
+  static var port: String {
+    URL(string: url)?.port.map(String.init) ?? "4242"
+  }
+}
+
 @MainActor
 @Observable
 final class BoardClient {
@@ -49,7 +62,7 @@ final class BoardClient {
 
   func refresh() async {
     do {
-      guard let url = URL(string: "http://127.0.0.1:4242/api/services") else { return }
+      guard let url = URL(string: "\(BoardConfig.url)/api/services") else { return }
       let (data, response) = try await URLSession.shared.data(from: url)
       guard (response as? HTTPURLResponse)?.statusCode == 200 else {
         reachable = false
@@ -85,7 +98,7 @@ final class BoardClient {
   }
 
   private func post(_ path: String, _ body: [String: Any]) async {
-    guard let url = URL(string: "http://127.0.0.1:4242\(path)") else { return }
+    guard let url = URL(string: "\(BoardConfig.url)\(path)") else { return }
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -199,7 +212,7 @@ struct TrayMenu: View {
   }
 
   private func openBoard() {
-    if let url = URL(string: "http://127.0.0.1:4242") {
+    if let url = URL(string: BoardConfig.url) {
       NSWorkspace.shared.open(url)
     }
   }
@@ -209,7 +222,7 @@ struct TrayMenu: View {
     guard !root.isEmpty else { return }
     let task = Process()
     task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-    task.arguments = ["-lc", "cd \(shellEscape(root)) && DEVBOARD_TRAY=0 nohup bun run server.ts >/dev/null 2>&1 &"]
+    task.arguments = ["-lc", "cd \(shellEscape(root)) && DEVBOARD_TRAY=0 PORT=\(BoardConfig.port) nohup bun run server.ts >/dev/null 2>&1 &"]
     try? task.run()
     Task {
       try? await Task.sleep(for: .milliseconds(800))

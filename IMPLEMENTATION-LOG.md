@@ -31,7 +31,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-21 | Give saved services an identity that survives name collisions | done | `add` suffixes on id collision when cwd differs. `replace` keeps the id. Same cwd+port pin replaces in place. Existing `services.json` loads unchanged. |
 | F-22 | CLI parity, `--json`, and a `doctor` command | done | `add`/`rm`/`pin`/`open`/`ls --json`/`doctor`. Smoke step [4] pins via CLI; step [9] round-trips add/ls/open/rm. Non-GET CLI calls always send JSON. |
 | F-23 | Shareable pin template checked into a project | done | `devboard.json` at a project root. Import via + Add, worktree Import pins, Launch, and project Add from folder. Idempotent; never writes live status back. |
-| F-24 | Point the tray at the same board as the CLI, and read the version from package.json | todo | Tier 3 — waiting |
+| F-24 | Point the tray at the same board as the CLI, and read the version from package.json | done | Tray reads `DevboardURL` from Info.plist. `build-tray.sh` writes it from `DEVBOARD_URL`/`PORT` and the version from `package.json`. Rebuild required for a new URL. |
 | F-25 | Ask before restarting an unmanaged row with a lossy command | todo | Tier 3 — waiting |
 | F-26 | Allow editing a preset | todo | Tier 3 — waiting |
 | F-27 | Stop running `du` on every worktree and Attention scan | todo | Tier 3 — waiting |
