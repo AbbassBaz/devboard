@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { existsSync, realpathSync } from "node:fs";
 import type { Pinned, Service } from "../lib/types";
 import {
+  blockingWorktreeServices,
   createWorktree,
   parseGitdirFile,
   parseWorktreeList,
@@ -162,6 +163,22 @@ describe("prune and remove", () => {
     await expect(removeOrphanedWorktree(join(root, "app"))).rejects.toThrow("refusing to delete a git repository");
     expect((await removeOrphanedWorktree(orphan)).path).toBe(orphan);
     expect(await Bun.file(orphan).exists()).toBe(false);
+  });
+});
+
+describe("blockingWorktreeServices", () => {
+  const row = (over: Partial<Service>): Service => ({
+    id: "api-1", name: "api", kind: "dev", status: "running", ports: [1],
+    pinned: true, hasLog: false, hidden: false, readiness: "ready", ...over,
+  });
+
+  test("keeps running and starting rows under the path and drops stopped or outside ones", () => {
+    expect(blockingWorktreeServices([
+      row({ cwd: "/wt/apps/api" }),
+      row({ id: "web-1", name: "web", status: "starting", cwd: "/wt" }),
+      row({ id: "other-1", name: "other", cwd: "/else" }),
+      row({ id: "off-1", name: "off", status: "stopped", cwd: "/wt" }),
+    ], "/wt").map((s) => s.name)).toEqual(["api", "web"]);
   });
 });
 

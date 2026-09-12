@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Registry, pinnedId, slugify } from "../lib/registry";
@@ -91,6 +91,12 @@ describe("Registry", () => {
     expect(JSON.parse(text)).toHaveLength(1);
   });
 
+  test("a fresh home is 0700 and registry files are 0600", async () => {
+    await registry.save([{ id: "a-1", name: "a", cwd: "/tmp", command: "true", port: 1 }]);
+    expect(statSync(registry.path.replace(/\/services\.json$/, "")).mode & 0o777).toBe(0o700);
+    expect(statSync(registry.path).mode & 0o777).toBe(0o600);
+  });
+
   test("projects persist, a member lives in one project, and unpin drops it", async () => {
     await registry.add({ name: "api", cwd: "/tmp/a", command: "true", port: 1 });
     await registry.add({ name: "web", cwd: "/tmp/b", command: "true", port: 2 });
@@ -123,5 +129,21 @@ describe("Registry", () => {
     expect((await registry.loadPresets()).map((p) => p.serviceIds)).toEqual([["web-3001"]]);
     expect(await registry.deletePreset("frontend-only")).toBe(true);
     expect(await registry.deletePreset("frontend-only")).toBe(false);
+  });
+
+  test("a non-array services.json loads as [] and is left untouched", async () => {
+    writeFileSync(registry.path, '{ "nope": true }\n');
+    expect(await registry.load()).toEqual([]);
+    expect(await Bun.file(registry.path).text()).toBe('{ "nope": true }\n');
+  });
+
+  test("twenty concurrent adds keep every entry and leave no tmp files", async () => {
+    await Promise.all(Array.from({ length: 20 }, (_, i) =>
+      registry.add({ name: `n${i}`, cwd: "/tmp", command: "true", port: 5000 + i }),
+    ));
+    expect((await registry.load()).map((p) => p.id).sort()).toEqual(
+      Array.from({ length: 20 }, (_, i) => `n${i}-${5000 + i}`).sort(),
+    );
+    expect(readdirSync(registry.path.replace(/\/services\.json$/, "")).filter((n) => n.endsWith(".tmp"))).toEqual([]);
   });
 });

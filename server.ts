@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { collectAlerts } from "./lib/attention";
 import { Control, isValidLogId, killTree } from "./lib/control";
 import { discover as realDiscover } from "./lib/discover";
-import { parseEnvText, readProcessEnv } from "./lib/env";
+import { maskEnv, parseEnvText, readProcessEnv as readLiveEnv } from "./lib/env";
 import { applyReadiness, firstFreePort } from "./lib/health";
 import { classifyLine, countErrors } from "./lib/logs";
 import { logIdFor, matchPinned, mergeServices } from "./lib/merge";
@@ -14,7 +14,7 @@ import { Registry } from "./lib/registry";
 import { CrashWatch } from "./lib/restarts";
 import { suggestCommands } from "./lib/suggest";
 import type { Pinned, ProjectLink, RunningService, Service, StartSpec, WorktreeInfo } from "./lib/types";
-import { createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
+import { blockingWorktreeServices, createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
 
@@ -32,6 +32,7 @@ export type Deps = {
   allowedHosts?: string[];
   snapshot?: () => Promise<BoardSnapshot>;
   cacheMs?: number;
+  readProcessEnv?: (pid: number) => Promise<Record<string, string>>;
 };
 
 export type BoardHandler = ((req: Request) => Promise<Response>) & {
@@ -101,6 +102,26 @@ export function createHandler(deps: Deps): BoardHandler {
     return refreshSnapshot();
   };
   const invalidate = () => { cached = null; };
+
+  const busyInWorktree = async (path: string) => {
+    const target = await resolved(expandHome(path.trim()));
+    const { services } = await snapshot();
+    const checked = await Promise.all(services.map(async (s) => ({
+      ...s,
+      cwd: s.cwd ? await resolved(s.cwd) : s.cwd,
+    })));
+    return blockingWorktreeServices(checked, target);
+  };
+
+  const refuseBusyWorktree = async (path: string) => {
+    const blockers = await busyInWorktree(path);
+    if (!blockers.length) return null;
+    return json({
+      error: "Stop and retire",
+      names: blockers.map((s) => s.name),
+      rootPids: blockers.flatMap((s) => (s.rootPid != null ? [s.rootPid] : [])),
+    }, 409);
+  };
 
   const withCrash = (services: Service[]) =>
     services.map((s) => {
@@ -224,7 +245,9 @@ export function createHandler(deps: Deps): BoardHandler {
 
       if (method === "GET" && pathname === "/api/services") {
         const { pinned, services: merged } = await snapshot();
-        const services = await withErrorCounts(withCrash(await applyReadiness(merged, pinned)));
+        const services = (await withErrorCounts(withCrash(await applyReadiness(merged, pinned)))).map((s) =>
+          s.env ? { ...s, env: maskEnv(s.env) } : s,
+        );
         const projects = await registry.loadProjects();
         return json({
           services,
@@ -293,6 +316,10 @@ export function createHandler(deps: Deps): BoardHandler {
       }
 
       const editPinned = /^\/api\/pinned\/([^/]+)$/.exec(pathname);
+      if (method === "GET" && editPinned) {
+        const pinned = (await registry.load()).find((p) => p.id === decodeURIComponent(editPinned[1]));
+        return pinned ? json({ pinned }) : fail("no pinned service with that id", 404);
+      }
       if ((method === "POST" && pathname === "/api/pinned") || (method === "PUT" && editPinned)) {
         const body = await readBody(req);
         const { name, cwd, command, port, healthUrl } = body;
@@ -466,6 +493,8 @@ export function createHandler(deps: Deps): BoardHandler {
       if (method === "POST" && pathname === "/api/worktrees/retire") {
         const { path, force } = await readBody(req);
         if (typeof path !== "string" || !path.trim()) return fail("path required");
+        const busy = await refuseBusyWorktree(path);
+        if (busy) return busy;
         return json(await retireWorktree(path, force === true));
       }
 
@@ -509,6 +538,8 @@ export function createHandler(deps: Deps): BoardHandler {
       if (method === "POST" && pathname === "/api/worktrees/remove") {
         const { path } = await readBody(req);
         if (typeof path !== "string" || !path.trim()) return fail("path required");
+        const busy = await refuseBusyWorktree(path);
+        if (busy) return busy;
         return json(await removeOrphanedWorktree(path));
       }
 
@@ -585,7 +616,13 @@ export function createHandler(deps: Deps): BoardHandler {
       if (method === "GET" && pathname === "/api/env") {
         const pid = Number(url.searchParams.get("pid"));
         if (!Number.isInteger(pid) || pid <= 1) return fail("pid required");
-        return json({ env: await readProcessEnv(pid) });
+        await control.hydrate();
+        const running = await deps.discover();
+        const known = running.some((s) => s.rootPid === pid || s.pids.includes(pid))
+          || control.listTracked().some((t) => t.pid === pid && t.exitedAt == null);
+        if (!known) return fail("no service with that pid", 404);
+        const env = await (deps.readProcessEnv ?? readLiveEnv)(pid);
+        return json({ env: url.searchParams.get("reveal") === "1" ? env : maskEnv(env) });
       }
 
       if (method === "POST" && pathname === "/api/ports/next") {

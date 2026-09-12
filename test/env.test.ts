@@ -1,11 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { formatEnv, parseEnvText, parsePsEww } from "../lib/env";
+import { formatEnv, maskEnv, parseEnvText, parsePsEww } from "../lib/env";
 
 describe("parseEnvText", () => {
   test("reads KEY=value, skips comments, and strips quotes", () => {
     expect(parseEnvText("# hi\nDATABASE_URL=postgres://x\nNAME=\"core api\"\nBAD\n")).toEqual({
       DATABASE_URL: "postgres://x",
       NAME: "core api",
+    });
+  });
+});
+
+describe("maskEnv", () => {
+  test("masks secret keys and URL passwords, leaves ordinary values", () => {
+    expect(maskEnv({
+      API_KEY: "abc",
+      PORT: "3000",
+      DATABASE_URL: "postgres://user:hunter2@localhost/app",
+    })).toEqual({
+      API_KEY: "••••",
+      PORT: "3000",
+      DATABASE_URL: "postgres://user:••••@localhost/app",
     });
   });
 });

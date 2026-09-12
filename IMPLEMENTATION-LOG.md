@@ -24,10 +24,10 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-14 | Fix `devboard logs -f` stalling after 200 lines | done | `GET /api/logs/:id?from=` returns new lines + `next` + `reset`. CLI follows by byte offset and prints `--- log reset ---` after clear. |
 | F-15 | One server scan loop with a cached snapshot | done | 3s loop writes the snapshot; GET reuses it for `cacheMs`. Mutations invalidate. Tests keep `cacheMs` 0. |
 | F-16 | Show readiness on the page | done | Unhealthy running rows use the error-token dot, `health <status> · <ms>ms` in meta, and `N unhealthy` in the top bar. Browser-checked on a 500 health URL. |
-| F-17 | Mask secret-looking env values and gate `/api/env` | todo | Tier 2 — waiting |
-| F-18 | Validate hand-edited registry JSON and serialize writes | todo | Tier 2 — waiting |
+| F-17 | Mask secret-looking env values and gate `/api/env` | done | `maskEnv` on `/api/env` and `/api/services`. Unrelated pid is 404. `?reveal=1` and `GET /api/pinned/:id` return real values. Home 0700, files 0600. Start still gets the real overrides. |
+| F-18 | Validate hand-edited registry JSON and serialize writes | done | Skip bad entries and log one line. GET leaves a `{ "nope": true }` file untouched. Per-path write queue + unique tmp names; 20 concurrent adds keep all 20. |
 | F-19 | Reconcile AGENTS.md with the new direction and add CONTRIBUTING.md | done | Loopback-only wording; design.md is the current spec and can be amended in-PR. CONTRIBUTING.md covers the four gotchas. |
-| F-20 | Refuse to retire a worktree while a server runs in it | todo | Tier 2 — waiting |
+| F-20 | Refuse to retire a worktree while a server runs in it | done | Retire and orphan-remove 409 with names while running or starting under the path. Toast offers Stop and retire. Main-worktree protection unchanged. Browser: starting `wt-sleep` in a throwaway worktree blocked Retire; Stop and retire killed it and removed the checkout. |
 | F-21 | Give saved services an identity that survives name collisions | todo | Tier 3 — waiting |
 | F-22 | CLI parity, `--json`, and a `doctor` command | todo | Tier 3 — waiting |
 | F-23 | Shareable pin template checked into a project | todo | Tier 3. Human: scan automatically via a button |
@@ -43,6 +43,12 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 All doable Tier 1 items are done. No blocked items. Nothing waiting on you for Tier 1.
 
 Continue to Tier 2 only when you say go: F-04, F-10, F-11, F-12, F-15, F-16, F-17, F-18, F-20.
+
+## Tier 2 pause
+
+All doable Tier 2 items are done (F-04, F-10, F-11, F-12, F-15, F-16, F-17, F-18, F-20). No blocked items.
+
+Continue to Tier 3 only when you say go: F-21, F-22, F-23, F-24, F-25, F-26, F-27, F-28, F-29.
 
 ## Noticed
 

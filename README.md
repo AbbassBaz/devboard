@@ -79,6 +79,8 @@ Loopback only. The API kills process trees and runs saved shell commands. Never 
 
 Requests whose Host or Origin is not loopback (`127.0.0.1`, `localhost`, `::1`), or whose `Sec-Fetch-Site` is present and not `same-origin` or `none`, get 403. Non-GET requests must be `application/json` (415 otherwise). There are no CORS headers.
 
+Env overrides and log files under `~/.devboard` are plaintext local files (`0700` dir, `0600` files). The page masks secret-looking keys; starting a service still receives the real values.
+
 ## Smoke
 
 `bash scripts/smoke.sh` drives the eight-step checklist against a throwaway `DEVBOARD_HOME`. It aborts if `:4242` or `:3999` is already taken. Last local run before this rewrite: 2026-09-10, passed.

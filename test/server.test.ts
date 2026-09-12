@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Control, isAlive, killTree } from "../lib/control";
@@ -321,6 +321,48 @@ describe("GET /api/worktrees and prune/remove", () => {
     expect(body.started[0].id).toBe(body.created[0].id);
     spawned.push(body.started[0].pid);
   });
+
+  test("retire and remove 409 while a server runs in the checkout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "devboard-wt-busy-"));
+    const repo = join(root, "app");
+    const linked = join(root, "app-agent");
+    const orphan = join(root, "orphan");
+    const git = async (cwd: string, args: string[]) => {
+      const proc = Bun.spawn(["git", "-c", "user.name=devboard", "-c", "user.email=devboard@test", ...args], {
+        cwd, stdout: "ignore", stderr: "pipe",
+      });
+      const err = await new Response(proc.stderr).text();
+      if ((await proc.exited) !== 0) throw new Error(err);
+    };
+    await git(root, ["init", "-q", "app"]);
+    await git(repo, ["commit", "--allow-empty", "-qm", "init"]);
+    await git(repo, ["worktree", "add", "-q", "-b", "agent", linked]);
+
+    running = [{ ...docs, name: "api", cwd: linked, ports: [39980] }];
+    const busy = await call("POST", "/api/worktrees/retire", { path: linked });
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toMatchObject({ error: "Stop and retire", names: ["api"] });
+    expect(existsSync(linked)).toBe(true);
+
+    running = [];
+    expect((await call("POST", "/api/worktrees/retire", { path: linked })).status).toBe(200);
+    expect(existsSync(linked)).toBe(false);
+
+    const main = await call("POST", "/api/worktrees/retire", { path: repo });
+    expect(main.status).toBe(500);
+    expect((await main.json()).error).toMatch(/main worktree/);
+    expect(existsSync(repo)).toBe(true);
+
+    mkdirSync(orphan);
+    writeFileSync(join(orphan, ".git"), "gitdir: /no/such/repo/.git/worktrees/orphan\n");
+    running = [{ ...docs, name: "ghost", cwd: orphan, ports: [39981] }];
+    const blocked = await call("POST", "/api/worktrees/remove", { path: orphan });
+    expect(blocked.status).toBe(409);
+    expect(existsSync(orphan)).toBe(true);
+    running = [];
+    expect((await call("POST", "/api/worktrees/remove", { path: orphan })).status).toBe(200);
+    expect(existsSync(orphan)).toBe(false);
+  });
 });
 
 describe("projects", () => {
@@ -426,12 +468,49 @@ describe("healthUrl, ports, presets and attention", () => {
     expect(res.headers.get("content-type")).toContain("font/woff2");
   });
 
-  test("GET /api/env reads the current process environment", async () => {
-    const res = await call("GET", `/api/env?pid=${process.pid}`);
-    expect(res.status).toBe(200);
-    const { env } = await res.json();
-    expect(env.HOME || env.PATH).toBeString();
-    expect((await call("GET", "/api/env")).status).toBe(400);
+  test("GET /api/env masks secrets, gates pids, and reveal returns the value", async () => {
+    running = [{ ...docs, rootPid: 4242, pids: [4242, 4243] }];
+    const liveEnv = { API_KEY: "secret-value", PORT: "3000" };
+    const envHandle = createHandler({
+      discover: async () => running,
+      registry,
+      control,
+      allowedHosts: ["devboard.test"],
+      readProcessEnv: async () => liveEnv,
+    });
+    const envCall = (path: string) => envHandle(new Request(`http://devboard.test${path}`));
+    const masked = await (await envCall("/api/env?pid=4242")).json();
+    expect(masked.env).toEqual({ API_KEY: "••••", PORT: "3000" });
+    const revealed = await (await envCall("/api/env?pid=4243&reveal=1")).json();
+    expect(revealed.env.API_KEY).toBe("secret-value");
+    expect((await envCall("/api/env?pid=424242")).status).toBe(404);
+    expect((await envCall("/api/env")).status).toBe(400);
+
+    running = [];
+    await registry.add({
+      name: "envy", cwd: home, command: `printf 'API_KEY=%s\\n' "$API_KEY"; exit 0`, port: 39894,
+      env: { API_KEY: "secret-value" },
+    });
+    const started = await call("POST", "/api/start", { id: "envy-39894" });
+    expect(started.status).toBe(200);
+    spawned.push((await started.json()).pid);
+    await Bun.sleep(300);
+    const log = await (await call("GET", "/api/logs/envy-39894?lines=50")).json();
+    expect(log.lines).toContain("API_KEY=secret-value");
+    await registry.unpin("envy-39894");
+  });
+
+  test("GET /api/services masks env and GET /api/pinned/:id returns the real copy", async () => {
+    running = [];
+    await registry.add({
+      name: "secret", cwd: home, command: "true", port: 39893,
+      env: { API_KEY: "abc", PORT: "3000" },
+    });
+    const list = await (await call("GET", "/api/services")).json();
+    expect(list.services.find((s: Service) => s.id === "secret-39893").env).toEqual({ API_KEY: "••••", PORT: "3000" });
+    const raw = await (await call("GET", "/api/pinned/secret-39893")).json();
+    expect(raw.pinned.env).toEqual({ API_KEY: "abc", PORT: "3000" });
+    await registry.unpin("secret-39893");
   });
 
   test("GET /api/attention reports a port conflict", async () => {
@@ -642,5 +721,22 @@ describe("tracked process status", () => {
     }
     expect(readdirSync(quietHome).filter((n) => !listed.has(n))).toEqual([]);
     rmSync(quietHome, { recursive: true, force: true });
+  });
+
+  test("GET /api/services stays 200 when services.json is not an array", async () => {
+    const badHome = realpathSync(mkdtempSync(join(tmpdir(), "devboard-badjson-")));
+    writeFileSync(join(badHome, "services.json"), '{ "nope": true }\n');
+    const badHandle = createHandler({
+      discover: async () => [docs],
+      registry: new Registry(badHome),
+      control: new Control(badHome),
+      allowedHosts: ["devboard.test"],
+    });
+    const res = await badHandle(new Request("http://devboard.test/api/services"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.services.some((s: Service) => s.rootPid === 64672)).toBe(true);
+    expect(await Bun.file(join(badHome, "services.json")).text()).toBe('{ "nope": true }\n');
+    rmSync(badHome, { recursive: true, force: true });
   });
 });

@@ -23,7 +23,7 @@ Dark, dense, keyboard-first. Three fixed rows: a 44px top bar, the workspace, an
 
 **Keys.** `↑↓` or `j`/`k` select. `space` toggles the selected server. `r` restarts. `e` jumps to the next error. `c` copies `cd <cwd> && <command>`. `o` opens the port in the browser. `/` focuses the filter. `Esc` closes a menu or sheet. Keys are ignored while an input has focus.
 
-**Sheets.** Worktrees, projects, presets, attention, env, and the full server edit open as overlays from the `···` menus. `Esc` or a click on the backdrop closes them. Destructive actions (stop all, stop project, kill system, remove, clear log) ask first.
+**Sheets.** Worktrees, projects, presets, attention, env, and the full server edit open as overlays from the `···` menus. `Esc` or a click on the backdrop closes them. Destructive actions (stop all, stop project, kill system, remove, clear log) ask first. Retire and orphan-remove refuse while a server is running or starting under that path (409, then the status-bar Stop and retire action). The env sheet masks secret-looking live values and has a Reveal text button; a note says `ps eww` cuts values at the first space.
 
 The token, layout, and state rules below are the rest of the spec.
 
@@ -123,7 +123,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 ### Status bar — 28px, `#1c1f24`, border-top `#2a2e35`, mono 11 dim, `0 12px`
 
-`↑↓` select · `␣` on/off · `r` restart · `e` next err · `c` copy run cmd · `o` open · `/` filter. Keys `#d7dae0`. Right: `poll 3s · 127.0.0.1:4242`. Copy toast 1.6s here: `copied · <text>` accent / dim.
+`↑↓` select · `␣` on/off · `r` restart · `e` next err · `c` copy run cmd · `o` open · `/` filter. Keys `#d7dae0`. Right: `poll 3s · 127.0.0.1:4242`. Copy toast 1.6s here: `copied · <text>` accent / dim. Retire or remove while a server is running or starting in that checkout shows `Stop and retire · <names>` for 8s with a text-button action that kills those rows and retries.
 
 ### Overlay sheets
 
