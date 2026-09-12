@@ -125,6 +125,18 @@ export type WorktreeInfo = {
   diskMb: number;
   serviceIds: string[];
   ports: number[];
+  hasTemplate?: boolean;
+};
+
+/** One row in a checked-in `devboard.json`. `cwd` is a relative subpath of the repo. */
+export type PinTemplateEntry = {
+  name: string;
+  command: string;
+  port: number;
+  cwd?: string;
+  healthUrl?: string;
+  env?: Record<string, string>;
+  restartOnCrash?: boolean;
 };
 
 export type StaleReason = "prunable" | "orphaned";

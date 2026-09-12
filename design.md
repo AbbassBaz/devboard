@@ -94,7 +94,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 ### Sidebar — `#191c21`, border-right `#2a2e35`
 
 - Filter 28px, radius 5, bg `#16181c`, placeholder “Filter servers  /”. Name or port. `/` focuses it.
-- `+ Add` opens an inline form under the filter (bg `#1c1f24`): name, folder, command \| port (`1fr 80px`), Cancel / **Add** (accent fill, ink, 600). Folder blur → `GET /api/suggest`. Submit → `POST /api/pinned`. Extra fields (health, env, restart-on-crash) stay on the Edit sheet.
+- `+ Add` opens an inline form under the filter (bg `#1c1f24`): name, folder, command \| port (`1fr 80px`), Cancel / **Add** (accent fill, ink, 600). Folder blur → `GET /api/suggest` and `GET /api/import`. When the folder has a `devboard.json` with pins that are not already saved, **Import N pins** appears on the left of the actions and POSTs `/api/import`. Submit → `POST /api/pinned`. Extra fields (health, env, restart-on-crash) stay on the Edit sheet.
 - Group header (`10px 12px 4px`, 11px): uppercase 600 `.06em` `#aeb4bf` (project name, or “Other”) · mono `running/total` dim · localhost port links `:3000` and any saved project links · project text buttons `start` / `stop` (hover `#23272e`, green / red) → `/api/projects/:id/start|stop`.
 - Row: `10px 1fr auto auto`, gap 10, margin `0 6px`, padding `7px 8px 7px 10px`, radius 6. Selected `#242932`, hover `#23272e`. Click selects.
   - Dot 8px: running `#4fb477` + ring; busy `#d4a72c` pulse `.8s`; stopped `#3a3e46`; running + `readiness: unhealthy` uses the error token and an `unhealthy` title.
@@ -127,7 +127,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 ### Overlay sheets
 
-Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for worktrees, project create/edit, presets, attention, env, and full server edit. Clicking the dimmed backdrop or `Esc` closes. Do not revive the old tabbed board.
+Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for worktrees, project create/edit, presets, attention, env, and full server edit. Clicking the dimmed backdrop or `Esc` closes. Do not revive the old tabbed board. A worktree card shows **Import pins** when that checkout has a `devboard.json`. Launch and project Add from folder import the same file when it exists (idempotent, no overwrite).
 
 ## Behaviour
 
@@ -146,7 +146,7 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 ## Endpoints
 
-`/api/services`, `/api/logs/:id`, `/api/start`, `/api/restart`, `/api/kill`, `/api/pin`, `/api/pinned`, `/api/projects/:id/start|stop|members`, `/api/suggest`, `/api/open`, plus existing worktrees / presets / attention / env / ignore routes for the sheet features.
+`/api/services`, `/api/logs/:id`, `/api/start`, `/api/restart`, `/api/kill`, `/api/pin`, `/api/pinned`, `/api/projects/:id/start|stop|members`, `/api/suggest`, `/api/import`, `/api/open`, plus existing worktrees / presets / attention / env / ignore routes for the sheet features.
 
 ## Do not
 

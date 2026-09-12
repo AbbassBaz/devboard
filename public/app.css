@@ -238,6 +238,7 @@ input, textarea { font: inherit; color: var(--fg); }
 .add-row input { min-width: 0; }
 .add-acts { display: flex; gap: 8px; justify-content: flex-end; }
 .add-acts .text { height: 26px; padding: 0 10px; font-size: 12px; color: var(--dim); }
+.add-acts #a-import { margin-right: auto; }
 .add-go {
   height: 26px;
   padding: 0 12px;

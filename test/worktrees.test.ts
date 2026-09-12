@@ -191,6 +191,7 @@ describe("scan, create and retire worktrees", () => {
     await git(repo, ["commit", "--allow-empty", "-qm", "init"]);
     await git(repo, ["worktree", "add", "-q", "-b", "agent", linked]);
     writeFileSync(join(linked, "note.txt"), "dirty");
+    writeFileSync(join(linked, "devboard.json"), "[]");
     const services: Service[] = [{
       id: "api-1", name: "api", kind: "dev", status: "running", ports: [3001],
       cwd: linked, pinned: true, hasLog: false, hidden: false, readiness: "ready",
@@ -200,7 +201,8 @@ describe("scan, create and retire worktrees", () => {
     const main = worktrees.find((w) => w.path === realpathSync(repo));
     const wt = worktrees.find((w) => w.path === realpathSync(linked));
     expect(main).toMatchObject({ main: true, dirty: false, branch: "main" });
-    expect(wt).toMatchObject({ main: false, dirty: true, branch: "agent", serviceIds: ["api-1"], ports: [3001] });
+    expect(wt).toMatchObject({ main: false, dirty: true, branch: "agent", serviceIds: ["api-1"], ports: [3001], hasTemplate: true });
+    expect(main).toMatchObject({ hasTemplate: false });
     expect(wt!.diskMb).toBeGreaterThanOrEqual(0);
   });
 

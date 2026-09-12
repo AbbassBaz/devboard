@@ -481,6 +481,28 @@ describe("healthUrl, ports, presets and attention", () => {
     expect((await call("GET", "/api/suggest")).status).toBe(400);
   });
 
+  test("POST /api/import is idempotent and does not overwrite", async () => {
+    const dir = join(home, "tmpl-app");
+    mkdirSync(join(dir, "apps", "api"), { recursive: true });
+    writeFileSync(join(dir, "devboard.json"), JSON.stringify([
+      { name: "web", command: "bun run dev", port: 39100 },
+      { name: "api", command: "bun run --watch src/index.ts", port: 39101, cwd: "apps/api" },
+    ]));
+    const peek = await call("GET", `/api/import?dir=${encodeURIComponent(dir)}`);
+    expect(peek.status).toBe(200);
+    expect(await peek.json()).toMatchObject({ exists: true, importable: 2 });
+    const first = await call("POST", "/api/import", { dir });
+    expect(first.status).toBe(200);
+    const created = (await first.json()).created;
+    expect(created).toHaveLength(2);
+    expect(created.map((p: { id: string }) => p.id).sort()).toEqual(["api-39101", "web-39100"]);
+    const second = await call("POST", "/api/import", { dir });
+    expect((await second.json()).created).toHaveLength(0);
+    const web = (await registry.load()).find((p) => p.id === "web-39100");
+    expect(web).toMatchObject({ command: "bun run dev", port: 39100, cwd: dir });
+    expect((await call("GET", "/api/import")).status).toBe(400);
+  });
+
   test("serves a self-hosted font", async () => {
     const res = await call("GET", "/fonts/IBMPlexSans-Regular.woff2");
     expect(res.status).toBe(200);

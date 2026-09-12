@@ -600,6 +600,7 @@ function toggleAdd() {
   if (addOpen) {
     $("#addForm").reset();
     $("#a-suggest").hidden = true;
+    $("#a-import").hidden = true;
     $("#addError").textContent = "";
     $("#a-name").focus();
   }
@@ -729,6 +730,7 @@ function paintWt() {
       <div class="wt-acts">
         <button type="button" data-act="wt-open" data-path="${esc(w.path)}">Open</button>
         <button type="button" data-act="wt-launch" data-path="${esc(w.path)}">Launch</button>
+        ${w.hasTemplate ? `<button type="button" data-act="wt-import" data-path="${esc(w.path)}">Import pins</button>` : ""}
         ${w.main ? "" : `<button type="button" data-act="wt-retire" class="danger" data-path="${esc(w.path)}" data-dirty="${w.dirty ? "1" : ""}" data-locked="${w.locked ? "1" : ""}">Retire</button>`}
       </div>
     </article>`;
@@ -925,6 +927,13 @@ document.addEventListener("click", async (ev) => {
       await scanWt();
     }
     else if (act === "wt-open") await api("POST", "/api/open", { path: btn.dataset.path });
+    else if (act === "wt-import") {
+      const result = await api("POST", "/api/import", { dir: btn.dataset.path });
+      const n = (result.created ?? []).length;
+      toast(n ? `Imported ${n} pin${n === 1 ? "" : "s"} from devboard.json` : "Nothing new to import");
+      await scanWt();
+      refresh();
+    }
     else if (act === "wt-launch") {
       const result = await api("POST", "/api/worktrees/launch", { path: btn.dataset.path });
       for (const err of result.errors ?? []) toast(`${err.id}: ${err.error}`);
@@ -1066,7 +1075,35 @@ $("#logBody").addEventListener("scroll", () => {
 });
 $("#overlay").addEventListener("click", (ev) => { if (ev.target === $("#overlay")) closeSheet(); });
 
-$("#a-cwd").addEventListener("blur", () => loadSuggest($("#a-cwd").value, "#a-suggest", "#a-cmd", "#a-port"));
+async function loadImport(dir) {
+  const btn = $("#a-import");
+  if (!dir?.trim()) { btn.hidden = true; return; }
+  try {
+    const data = await api("GET", `/api/import?dir=${encodeURIComponent(dir.trim())}`);
+    if (!data.exists || !data.importable) { btn.hidden = true; return; }
+    btn.hidden = false;
+    btn.textContent = data.importable === 1 ? "Import 1 pin" : `Import ${data.importable} pins`;
+  } catch {
+    btn.hidden = true;
+  }
+}
+
+$("#a-cwd").addEventListener("blur", () => {
+  loadSuggest($("#a-cwd").value, "#a-suggest", "#a-cmd", "#a-port");
+  loadImport($("#a-cwd").value);
+});
+$("#a-import").onclick = async () => {
+  const dir = $("#a-cwd").value;
+  try {
+    const result = await api("POST", "/api/import", { dir });
+    const n = (result.created ?? []).length;
+    toast(n ? `Imported ${n} pin${n === 1 ? "" : "s"} from devboard.json` : "Nothing new to import");
+    await loadImport(dir);
+    refresh();
+  } catch (e) {
+    $("#addError").textContent = e.message;
+  }
+};
 $("#f-cwd").addEventListener("blur", () => loadSuggest($("#f-cwd").value, "#f-suggest", "#f-cmd", "#f-port"));
 function bindSuggest(box) {
   box.addEventListener("click", (ev) => {

@@ -5,6 +5,7 @@ import type { Pinned, Service, StaleWorktree, WorktreeInfo } from "./types";
 import { firstFreePort } from "./health";
 import { mapUnder, underFolder } from "./projects";
 import { rewriteCommandPort, rewriteUrlPort } from "./suggest";
+import { TEMPLATE_FILE } from "./template";
 
 export const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? homedir() + p.slice(1) : p);
 
@@ -290,6 +291,7 @@ export async function scanWorktrees(dir: string, services: Service[] = []): Prom
         diskMb: missing ? 0 : await diskMb(entry.path),
         serviceIds: matched.map((s) => s.id!).filter(Boolean),
         ports: [...new Set(matched.flatMap((s) => s.ports))],
+        hasTemplate: !missing && await exists(join(entry.path, TEMPLATE_FILE)),
       });
     }
   }
