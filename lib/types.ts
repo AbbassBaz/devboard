@@ -141,6 +141,22 @@ export type PinTemplateEntry = {
   restartOnCrash?: boolean;
 };
 
+export type TraceHit = {
+  i: number;
+  line: string;
+  level: "error" | "warn" | "info" | "debug" | "other";
+};
+
+export type TraceGroup = {
+  id: string;
+  hits: TraceHit[];
+};
+
+export type TraceResult = {
+  token: string;
+  groups: TraceGroup[];
+};
+
 export type StaleReason = "prunable" | "orphaned";
 
 export type StaleWorktree = {

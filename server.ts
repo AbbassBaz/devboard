@@ -694,6 +694,26 @@ export function createHandler(deps: Deps): BoardHandler {
         return json({ port: firstFreePort(used) });
       }
 
+      if (method === "GET" && pathname === "/api/trace") {
+        const token = (url.searchParams.get("token") ?? "").trim();
+        if (!token) return fail("token required");
+        if (token.length > 200) return fail("token too long");
+        const ids = (url.searchParams.get("ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        if (!ids.length) return fail("ids required");
+        const groups = [];
+        for (const id of ids.slice(0, 50)) {
+          if (!isValidLogId(id) || !control.hasLog(id)) continue;
+          const { lines } = await control.tailLog(id, 5000);
+          const hits = [];
+          for (let i = 0; i < lines.length; i++) {
+            if (!lines[i].includes(token)) continue;
+            hits.push({ i, line: lines[i], level: classifyLine(lines[i]) });
+          }
+          if (hits.length) groups.push({ id, hits });
+        }
+        return json({ token, groups });
+      }
+
       const logs = /^\/api\/logs\/([^/]+)$/.exec(pathname);
       if (method === "GET" && logs) {
         const id = decodeURIComponent(logs[1]);

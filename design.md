@@ -19,7 +19,7 @@ Dark, dense, keyboard-first. Three fixed rows: a 44px top bar, the workspace, an
 
 **Sidebar.** One row per dev server, grouped under its project (or "Other"). Each row has a state dot, the name, a port link, `pid · cpu · MB · uptime` when running, an error count when the log has errors, a CPU bar, and a switch. The switch is the state: green and on means running, grey and off means stopped, amber means starting or stopping. Switching off kills the process tree; an unpinned server is pinned first so it stays on the board and can be switched back on. Switching on runs the saved command. Each group header has its own `start` and `stop` for the whole project. The filter box at the top matches name or port; `/` focuses it. System processes (Postgres, Redis, macOS services) sit in a collapsed **System** list with only a Kill action. Hidden servers sit in a collapsed **Hidden** list with a Show action.
 
-**Log pane.** The selected server: dot, name, `localhost:PORT ↗`, and state. One primary button: **Start** when stopped, **Restart** when running. `···` holds Open in browser, Open in editor, Copy run command, Show errors only, Follow, Clear log, then Pin or Edit, Env, Add to or Remove from a project, Hide, and Remove. Under that, click-to-copy `cwd` and `$ command`. The toolbar has a text filter, an error chip that appears only when the log has errors (click jumps to the next one, shift-click shows errors only), and a `↓ Resume follow` button that appears only when you have scrolled away from the tail. Lines are coloured by content: errors red, warnings amber, ready and listening green. Click a line to copy it. Timestamps show only when the log has them.
+**Log pane.** The selected server: dot, name, `localhost:PORT ↗`, and state. One primary button: **Start** when stopped, **Restart** when running. `···` holds Open in browser, Open in editor, Copy run command, Show errors only, Follow, Clear log, then Pin or Edit, Env, Add to or Remove from a project, Hide, and Remove. Under that, click-to-copy `cwd` and `$ command`. The toolbar has a text filter, an error chip that appears only when the log has errors (click jumps to the next one, shift-click shows errors only), and a `↓ Resume follow` button that appears only when you have scrolled away from the tail. Lines are coloured by content: errors red, warnings amber, ready and listening green. Click a line to copy it. Id-shaped tokens (UUID, 16+ hex, `req-`/`req_`, W3C trace id) are accent buttons that open a Trace view in this pane; JSON lines with `requestId` / `reqId` / `traceId` / `trace_id` / `correlationId` / `x-request-id` also get a small id label. Timestamps show only when the log has them.
 
 **Keys.** `↑↓` or `j`/`k` select. `space` toggles the selected server. `r` restarts. `e` jumps to the next error. `c` copies `cd <cwd> && <command>`. `o` opens the port in the browser. `/` focuses the filter. `Esc` closes a menu or sheet. Keys are ignored while an input has focus.
 
@@ -111,7 +111,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 **B** (30px, mono 11 dim, border `#22262c`): click-to-copy `cwd` and `$ command` (glyph `#4a5160`, hover `#d7dae0`); `pid · cpu · MB · up` when running.
 
-**Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`): log filter (26px, flex 1, min 120). Error chip only if the log has errors — click cycles next error, ⇧click toggles errors-only (`1 error ↓` → `error 1/3 ↓` → `errors only · 3`). `↓ Resume follow` (accent outline) only when follow is off. Right: `N lines` or `k/N lines`, `title` = log path.
+**Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`): log filter (26px, flex 1, min 120). Error chip only if the log has errors — click cycles next error, ⇧click toggles errors-only (`1 error ↓` → `error 1/3 ↓` → `errors only · 3`). `↓ Resume follow` (accent outline) only when follow is off. Right: `N lines` or `k/N lines`, `title` = log path. While Trace is open the filter, error chip, and follow hide; **Close trace** and `N hits` take their place.
 
 **Body** (`10px 16px 20px`, mono 12 / 1.6, `#c3c8d1`):
 - Line: flex, gap 14, pad `0 8px`, margin `0 -8px`, radius 3, `cursor: copy`; hover `#1f232a`. Columns: ln 30px right `#4a5160` · time `#5d636e` · text.
@@ -120,6 +120,8 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 - Blinking 7×14 accent caret at the tail while running (1s steps).
 - Empty (Plex, dim, max 520): stopped → “*name* is stopped…” + Start; unmanaged running → “Started outside devboard…”; filtered → “Nothing matches the current filter.”
 - Click a line copies its text. If lines have no timestamps, omit the time column — do not invent times.
+- Id tokens use the accent wash (`rgba(138,180,248,.12)`). Click opens Trace for that token. Default services: the selected row's project members, else every running `dev` row.
+- Trace stays in this pane (not a sheet): token, one chip per service, hits grouped by service in file order. A chip or hit jumps to that log at that line and highlights it. Esc or Close leaves Trace. No time-window fallback — children write straight to the file, so lines have no board timestamp.
 
 ### Status bar — 28px, `#1c1f24`, border-top `#2a2e35`, mono 11 dim, `0 12px`
 
@@ -131,7 +133,7 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 ## Behaviour
 
-- Select by row click or `↑↓` / `j`/`k` through **visible** (filtered) rows. Changing selection resets the error cursor and, if follow is on, scrolls the log to the tail. Persist `sel` in `localStorage`. `?sel=<id>` (tray Logs) selects that row on load and writes the same key.
+- Select by row click or `↑↓` / `j`/`k` through **visible** (filtered) rows. Changing selection resets the error cursor, closes Trace, and, if follow is on, scrolls the log to the tail. Persist `sel` in `localStorage`. `?sel=<id>` (tray Logs) selects that row on load and writes the same key.
 - `Space` toggles the selected server. `r` restarts if running. Restarting an unpinned row whose command still has quotes or shell metacharacters (rebuilt from `ps`) returns 409 and opens Edit so you can check quoting; Save pins and restarts. `e` next error. `c` copies `cd <cwd> && <command>`. `o` opens `http://localhost:<port>`.
 - Busy is optimistic: switch, dot, and primary go amber until `/api/services` agrees (or 15s). On start, append `=== devboard start · <cmd>` and `$ <cmd>` immediately.
 - Follow is on by default. Next-error turns it off. Resume follow turns it on and jumps to the tail. Scrolling away from the tail also turns it off.
@@ -142,11 +144,11 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 ## State
 
-`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logFilter`, `errOnly`, `follow`, `errCursor`, `menu` (`null|"top"|"log"`), `addOpen`, `toast`, `logs{id: lines[]}`.
+`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logFilter`, `errOnly`, `follow`, `errCursor`, `jumpLine`, `trace` (`null|{token, groups}`), `menu` (`null|"top"|"log"`), `addOpen`, `toast`, `logs{id: lines[]}`.
 
 ## Endpoints
 
-`/api/services`, `/api/logs/:id`, `/api/start`, `/api/restart`, `/api/kill`, `/api/pin`, `/api/pinned`, `/api/projects/:id/start|stop|members`, `/api/suggest`, `/api/import`, `/api/open`, plus existing worktrees / presets / attention / env / ignore routes for the sheet features.
+`/api/services`, `/api/logs/:id`, `/api/trace`, `/api/start`, `/api/restart`, `/api/kill`, `/api/pin`, `/api/pinned`, `/api/projects/:id/start|stop|members`, `/api/suggest`, `/api/import`, `/api/open`, plus existing worktrees / presets / attention / env / ignore routes for the sheet features.
 
 ## Do not
 

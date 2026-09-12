@@ -274,6 +274,24 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     expect(del.status).toBe(400);
     expect(await Bun.file(outside).text()).toBe("leave me alone\n");
   });
+
+  test("GET /api/trace groups matching lines by service id", async () => {
+    const uuid = "550e8400-e29b-41d4-a716-446655440000";
+    mkdirSync(control.logDir, { recursive: true });
+    writeFileSync(control.logPath("web-3000"), `ready\nGET / click ${uuid}\n`);
+    writeFileSync(control.logPath("api-3001"), `{"requestId":"${uuid}","msg":"load"}\n`);
+    writeFileSync(control.logPath("worker-3004"), `job ${uuid} done\nnoise\n`);
+    const res = await call("GET", `/api/trace?token=${uuid}&ids=web-3000,api-3001,worker-3004`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.token).toBe(uuid);
+    expect(body.groups.map((g: { id: string }) => g.id)).toEqual(["web-3000", "api-3001", "worker-3004"]);
+    expect(body.groups[0].hits).toEqual([{ i: 1, line: `GET / click ${uuid}`, level: "other" }]);
+    expect(body.groups[1].hits[0]).toMatchObject({ i: 0, level: "other" });
+    expect(body.groups[2].hits).toEqual([{ i: 0, line: `job ${uuid} done`, level: "other" }]);
+    expect((await call("GET", "/api/trace")).status).toBe(400);
+    expect((await call("GET", `/api/trace?token=${uuid}`)).status).toBe(400);
+  });
 });
 
 describe("GET /api/worktrees and prune/remove", () => {

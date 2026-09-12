@@ -36,7 +36,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-26 | Allow editing a preset | done | `PUT /api/presets/:id` keeps the id. Edit in the preset sheet; unknown id is 404. |
 | F-27 | Stop running `du` on every worktree and Attention scan | done | `diskMb` cached by `.git` mtime, 10 min TTL. Attention passes `disk: false`. Card shows `…` until size arrives. |
 | F-28 | Grow the tray: per-service actions and notifications | done | Per-row menu: Open, Restart, Stop, Copy run command, Logs (`?sel=`). One notification when `unhealthy` or `crash.gaveUp` flips. First poll is primed so existing alerts do not fire. |
-| F-29 | Trace one request across several services' logs | todo | Tier 3 — waiting |
+| F-29 | Trace one request across several services' logs | done | `findIds` + `GET /api/trace`. Clickable ids in the log pane open a Trace view grouped by service. JSON `requestId` and kin become the token. No time-window fallback. |
 
 ## Tier 1 pause
 

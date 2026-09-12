@@ -32,6 +32,8 @@ let editingPresetId = null;
 let clock = nowClock();
 let toastTimer = 0;
 let lastLogSig = "";
+let trace = null;
+let jumpLine = null;
 
 try { sel = localStorage.getItem("devboard.sel"); } catch {}
 try {
@@ -145,6 +147,144 @@ function splitLogLine(raw) {
   const m = LOG_TS.exec(text);
   return m ? { time: m[1].trim(), body: text.slice(m[0].length) } : { time: "", body: text };
 }
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const TRACEPARENT_RE = /\b[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}\b/gi;
+const REQ_ID_RE = /\breq[-_][a-z0-9][-a-z0-9]*/gi;
+const HEX_ID_RE = /\b[0-9a-f]{16,}\b/gi;
+const JSON_TRACE_KEYS = ["requestId", "reqId", "traceId", "trace_id", "correlationId", "x-request-id"];
+
+function jsonTraceIds(raw) {
+  const t = stripAnsi(raw).trim();
+  if (!(t.startsWith("{") && t.endsWith("}"))) return [];
+  try {
+    const v = JSON.parse(t);
+    if (!v || typeof v !== "object" || Array.isArray(v)) return [];
+    return JSON_TRACE_KEYS.map((k) => v[k]).filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+  } catch { return []; }
+}
+
+function findIds(raw) {
+  const text = stripAnsi(raw);
+  const out = [];
+  const add = (s) => { if (s && !out.includes(s)) out.push(s); };
+  for (const id of jsonTraceIds(text)) add(id);
+  const take = (re) => {
+    const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+    return [...text.matchAll(r)].map((m) => ({ value: m[0], start: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
+  };
+  const uuids = take(UUID_RE);
+  const tps = take(TRACEPARENT_RE);
+  for (const m of uuids) add(m.value);
+  for (const m of take(REQ_ID_RE)) add(m.value);
+  for (const m of tps) { add(m.value); add(m.value.split("-")[1] || ""); }
+  const covered = [...uuids, ...tps];
+  for (const m of take(HEX_ID_RE)) {
+    if (covered.some((c) => m.start >= c.start && m.end <= c.end)) continue;
+    add(m.value);
+  }
+  return out;
+}
+
+function clickableIds(raw) {
+  const json = jsonTraceIds(raw);
+  return findIds(raw).filter((t) =>
+    json.includes(t)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t)
+    || /^req[-_]/i.test(t)
+    || /^[0-9a-f]{16,}$/i.test(t)
+  );
+}
+
+function linkIds(text) {
+  const ids = clickableIds(text).slice().sort((a, b) => b.length - a.length);
+  if (!ids.length) return esc(text);
+  const spans = [];
+  for (const id of ids) {
+    let from = 0;
+    while (from < text.length) {
+      const i = text.indexOf(id, from);
+      if (i < 0) break;
+      spans.push({ start: i, end: i + id.length, id });
+      from = i + id.length;
+    }
+  }
+  spans.sort((a, b) => a.start - b.start || (b.end - a.end));
+  const kept = [];
+  let last = 0;
+  for (const s of spans) {
+    if (s.start < last) continue;
+    kept.push(s);
+    last = s.end;
+  }
+  let html = "";
+  let cur = 0;
+  for (const s of kept) {
+    html += esc(text.slice(cur, s.start));
+    html += `<button type="button" class="log-id" data-token="${esc(s.id)}">${esc(s.id)}</button>`;
+    cur = s.end;
+  }
+  return html + esc(text.slice(cur));
+}
+
+function defaultTraceIds() {
+  const s = selected();
+  if (s?.id) {
+    const p = projects.find((x) => x.memberIds.includes(s.id));
+    if (p?.memberIds.length) return [...p.memberIds];
+  }
+  return latest.filter((x) => x.kind === "dev" && x.status === "running" && !x.hidden && x.id).map((x) => x.id);
+}
+
+function closeTrace() {
+  if (!trace) return;
+  trace = null;
+  lastLogSig = "";
+  paintLog();
+}
+
+async function openTrace(token) {
+  if (!token) return;
+  follow = false;
+  trace = { token, groups: [], loading: true };
+  lastLogSig = "";
+  paintLog();
+  const ids = defaultTraceIds();
+  if (!ids.length && selected()?.id) ids.push(selected().id);
+  if (!ids.length) {
+    trace = { token, groups: [], loading: false, error: "no services to search" };
+    lastLogSig = "";
+    paintLog();
+    return;
+  }
+  try {
+    const q = new URLSearchParams({ token, ids: ids.join(",") });
+    const data = await api("GET", `/api/trace?${q}`);
+    trace = { token, groups: data.groups || [], loading: false };
+  } catch (e) {
+    trace = { token, groups: [], loading: false, error: e.message };
+  }
+  lastLogSig = "";
+  paintLog();
+}
+
+async function jumpToHit(id, i) {
+  trace = null;
+  follow = false;
+  jumpLine = i;
+  if (sel !== id) {
+    saveSel(id);
+    errCursor = null;
+    lastLogSig = "";
+    paintList();
+  } else {
+    lastLogSig = "";
+  }
+  await fetchLog(id, 5000);
+  lastLogSig = "";
+  paintLog();
+  document.getElementById(`log-${id}-${i}`)?.scrollIntoView({ block: "center" });
+}
+
 function formatLogTime(t) {
   if (!t) return "";
   const iso = Date.parse(t);
@@ -418,6 +558,17 @@ function paintLogTools(s) {
   const errIdx = raw.map((l, i) => (isLogErr(l) ? i : -1)).filter((i) => i >= 0);
   const shown = shownLogs(s);
   const chip = $("#errChip");
+  const tracing = !!trace;
+  $("#logFilter").hidden = tracing;
+  $("#traceClose").hidden = !tracing;
+  if (tracing) {
+    chip.hidden = true;
+    $("#followBtn").hidden = true;
+    const n = (trace.groups || []).reduce((sum, g) => sum + g.hits.length, 0);
+    $("#logCount").textContent = trace.loading ? "tracing…" : `${n} hit${n === 1 ? "" : "s"}`;
+    $("#logCount").title = trace.token;
+    return;
+  }
   chip.hidden = !s || errIdx.length === 0;
   chip.classList.toggle("on", errOnly);
   if (errIdx.length) {
@@ -434,8 +585,51 @@ function paintLogTools(s) {
   $("#logCount").title = s ? `~/.devboard/logs/${s.id}.log` : "";
 }
 
+function paintTraceBody() {
+  const body = $("#logBody");
+  if (trace.loading) {
+    body.innerHTML = `<div class="empty"><span>Tracing ${esc(trace.token)}…</span></div>`;
+    return;
+  }
+  if (trace.error) {
+    body.innerHTML = `<div class="empty"><span>${esc(trace.error)}</span></div>`;
+    return;
+  }
+  const groups = trace.groups || [];
+  if (!groups.length) {
+    body.innerHTML = `<div class="empty"><span>No hits for ${esc(trace.token)} in the current logs. Services have to print the same id; there is no time-window fallback.</span></div>`;
+    return;
+  }
+  const nameOf = (id) => latest.find((x) => x.id === id)?.name || id;
+  const chips = groups.map((g) =>
+    `<button type="button" class="trace-chip" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${g.hits[0].i}">${esc(nameOf(g.id))} · ${g.hits.length}</button>`
+  ).join("");
+  const blocks = groups.map((g) => {
+    const hits = g.hits.map((h) => {
+      const { time, body: rest } = splitLogLine(h.line);
+      const kind = lineKind(h.level, h.line);
+      const t = formatLogTime(time);
+      const display = rest || stripAnsi(h.line);
+      return `<div class="log-line ${kind}" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${h.i}" title="Open this log at this line">
+      <span class="ln">${h.i + 1}</span>
+      ${t ? `<span class="t">${esc(t)}</span>` : ""}
+      <span>${linkIds(display)}</span>
+    </div>`;
+    }).join("");
+    return `<div class="trace-group"><div class="trace-svc">${esc(nameOf(g.id))}</div>${hits}</div>`;
+  }).join("");
+  body.innerHTML = `<div class="trace"><div class="trace-head"><span class="trace-tok">${esc(trace.token)}</span>${chips}</div>${blocks}</div>`;
+}
+
 function paintLogBody(s) {
   const body = $("#logBody");
+  if (trace) {
+    const sig = ["trace", trace.token, trace.loading, trace.error || "", (trace.groups || []).length].join("|");
+    if (sig === lastLogSig) return;
+    lastLogSig = sig;
+    paintTraceBody();
+    return;
+  }
   if (!s) {
     body.innerHTML = `<div class="empty">Select a server to read its output.</div>`;
     lastLogSig = "";
@@ -445,7 +639,7 @@ function paintLogBody(s) {
   const shown = shownLogs(s);
   const unmanaged = s.status === "running" && !s.hasLog && !raw.length;
   const filteredEmpty = raw.length && !shown.length;
-  const sig = [s.id, raw.length, logText(raw.at(-1) ?? ""), logFilter, errOnly, errCursor, s.status, rowState(s), follow].join("|");
+  const sig = [s.id, raw.length, logText(raw.at(-1) ?? ""), logFilter, errOnly, errCursor, jumpLine, s.status, rowState(s), follow].join("|");
   if (sig === lastLogSig) {
     if (follow) body.scrollTop = body.scrollHeight;
     return;
@@ -477,10 +671,12 @@ function paintLogBody(s) {
     const kind = lineKind(l.level, l.text);
     const t = formatLogTime(time);
     const display = (rest || l.text) || l.text;
-    return `<div class="log-line ${kind}${errCursor === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
+    const tid = jsonTraceIds(l.raw)[0];
+    return `<div class="log-line ${kind}${errCursor === l.i || jumpLine === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
       <span class="ln">${l.i + 1}</span>
       ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
-      <span>${esc(display)}</span>
+      ${tid ? `<span class="log-tid" title="request id">${esc(tid)}</span>` : ""}
+      <span>${linkIds(display)}</span>
     </div>`;
   }).join("") + (rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "");
 
@@ -507,6 +703,8 @@ function select(id) {
   if (!id || sel === id) { saveSel(id); paintList(); return; }
   saveSel(id);
   errCursor = null;
+  jumpLine = null;
+  if (trace) { trace = null; }
   lastLogSig = "";
   paintList();
   paintLog();
@@ -815,14 +1013,18 @@ async function loadAttention() {
   }
 }
 
-async function fetchLog(id) {
+async function fetchLog(id, n = 4000) {
   if (!id) return;
   const s = latest.find((x) => x.id === id);
   if (!s?.hasLog) return;
   try {
-    const { lines, levels } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=4000`);
+    const { lines, levels } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=${n}`);
     logs[id] = (lines || []).map((text, i) => ({ text, level: levels?.[i] || "other" }));
-    if (id === sel) { lastLogSig = ""; paintLog(); }
+    if (id === sel) {
+      if (trace) return;
+      lastLogSig = "";
+      paintLog();
+    }
     else { paintChrome(); paintList(); }
   } catch {}
 }
@@ -845,15 +1047,18 @@ document.addEventListener("click", async (ev) => {
   if (menu && !ev.target.closest(".menu") && !ev.target.closest("#moreBtn") && !ev.target.closest("#logMenuBtn")) closeMenu();
   if (ev.target.closest("a[href]")) return;
 
+  const idBtn = ev.target.closest(".log-id");
+  if (idBtn?.dataset.token) { openTrace(idBtn.dataset.token); return; }
+
   const line = ev.target.closest(".log-line");
-  if (line && !ev.target.closest("button")) {
+  if (line && !ev.target.closest("button") && line.dataset.act !== "trace-jump") {
     const s = selected();
     const rec = logText((logs[s?.id] || [])[Number(line.dataset.i)]);
     if (rec) copy(stripAnsi(rec).replace(LOG_TS, "").trim() || stripAnsi(rec));
     return;
   }
 
-  const btn = ev.target.closest("button[data-act], [data-act=select]");
+  const btn = ev.target.closest("button[data-act], [data-act=select], [data-act=trace-jump]");
   if (!btn) return;
   const act = btn.dataset.act;
   const holder = btn.closest("[data-id]");
@@ -866,6 +1071,12 @@ document.addEventListener("click", async (ev) => {
     return;
   }
   if (act === "close-sheet") { closeSheet(); return; }
+  if (act === "close-trace") { closeTrace(); return; }
+  if (act === "trace-jump") {
+    const i = Number(btn.dataset.i);
+    if (id && Number.isInteger(i) && i >= 0) jumpToHit(id, i);
+    return;
+  }
   if (act === "start-all") { switchAll(true); return; }
   if (act === "stop-all") { switchAll(false); return; }
   if (act === "sheet-worktrees") {
@@ -1242,6 +1453,7 @@ document.addEventListener("keydown", (ev) => {
     if (typing) { ev.target.blur(); return; }
     if (menu) { closeMenu(); return; }
     if (overlayOpen()) { closeSheet(); return; }
+    if (trace) { closeTrace(); return; }
     if (addOpen) { addOpen = false; $("#addForm").hidden = true; }
     return;
   }
