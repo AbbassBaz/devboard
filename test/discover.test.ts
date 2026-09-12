@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyCwds, commandOf, exeName, findRoot, groupServices, indexProcesses, isWrapper, parseCwds, parseListeners, parseProcesses, selfAndAncestors, treePids } from "../lib/discover";
+import { applyCwds, commandLooksLossy, commandOf, exeName, findRoot, groupServices, indexProcesses, isWrapper, parseCwds, parseListeners, parseProcesses, selfAndAncestors, treePids } from "../lib/discover";
 
 const listenersText = await Bun.file(new URL("./fixtures/lsof-listeners.txt", import.meta.url)).text();
 const psText = await Bun.file(new URL("./fixtures/ps.txt", import.meta.url)).text();
@@ -74,6 +74,11 @@ describe("tree walk", () => {
     expect(commandOf("node /x/pnpm dev")).toBe("node /x/pnpm dev");
     expect(commandOf("bash deploy.sh -c")).toBe("bash deploy.sh -c");
     expect(commandOf("-zsh")).toBe("-zsh");
+  });
+
+  test("commandLooksLossy is true when the rebuilt command still has quotes or metacharacters", () => {
+    expect(commandLooksLossy(`bun -e 'console.log("a b")'`)).toBe(true);
+    expect(commandLooksLossy("pnpm dev")).toBe(false);
   });
 
   test("commandOf inserts -- after npm exec so the command's own flags survive a re-run", () => {
@@ -159,6 +164,7 @@ describe("groupServices", () => {
     expect(docs.pids.sort()).toEqual([64672, 64728, 64734]);
     expect(docs.ports).toEqual([3010]);
     expect(docs.command).toBe("node /Users/dev/.local/state/fnm_multishells/51664_1787044842120/bin/pnpm dev");
+    expect(docs.commandLossy).toBe(false);
     expect(services.find((s) => s.rootPid === 68729)!.command).toBe("npm exec -- next dev --port 3001");
     expect(docs.kind).toBe("dev");
     expect(docs.uptime).toBe("23-01:48:35");

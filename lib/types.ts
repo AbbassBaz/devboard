@@ -17,6 +17,7 @@ export type RunningService = {
   ports: number[];
   cwd?: string;
   command: string;
+  commandLossy?: boolean;
   name: string;
   kind: Kind;
   uptime: string;
@@ -57,6 +58,7 @@ export type Service = {
   ports: number[];
   cwd?: string;
   command?: string;
+  commandLossy?: boolean;
   uptime?: string;
   cpu?: number;
   memMb?: number;

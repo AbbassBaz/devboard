@@ -93,6 +93,11 @@ export function commandOf(args: string): string {
   return trimmed;
 }
 
+/** True when a rebuilt `ps` command still contains quoting or shell metacharacters. */
+export function commandLooksLossy(command: string): boolean {
+  return /['"$;&|><()]/.test(command);
+}
+
 export function isRuntime(p: Process): boolean {
   return RUNTIME_EXES.has(exeName(p.args));
 }
@@ -161,11 +166,13 @@ export function groupServices(listeners: Listener[], processes: Process[], selfP
     const pids = treePids(rootPid, byPpid);
     if (pids.includes(selfPid)) continue;
     const tree = pids.map((pid) => byPid.get(pid)).filter((p): p is Process => !!p);
+    const command = commandOf(root.args);
     out.push({
       rootPid,
       pids,
       ports: [...ports].sort((a, b) => a - b),
-      command: commandOf(root.args),
+      command,
+      commandLossy: commandLooksLossy(command),
       name: exeName(root.args),
       kind: isWrapper(root) || isRuntime(root) ? "dev" : "system",
       uptime: root.etime,

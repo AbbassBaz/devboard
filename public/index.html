@@ -103,6 +103,7 @@
       <label>Health URL <span class="opt">optional</span><input id="f-health" name="healthUrl" placeholder="http://127.0.0.1:3003/health"></label>
       <label>Env overrides <span class="opt">KEY=value, one per line</span><textarea class="mono" id="f-env" name="envText" rows="4" placeholder="DATABASE_URL=postgres://localhost/app"></textarea></label>
       <label class="check"><input type="checkbox" id="f-restart" name="restartOnCrash"> Restart on crash <span class="opt">5 tries, backoff</span></label>
+      <p class="lede" id="f-lossy-note" hidden>This command was rebuilt from ps with quoting gone. Check it, then save to pin and restart.</p>
       <div class="form-error" id="formError"></div>
       <div class="sheet-acts"><button class="primary" type="submit" id="formSubmit">Save changes</button><button type="button" class="ghost" data-act="close-sheet">Cancel</button></div>
     </form>

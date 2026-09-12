@@ -308,7 +308,9 @@ export function createHandler(deps: Deps): BoardHandler {
           const svc = await findRunning(body.rootPid);
           if (!svc) return fail("no running service with that rootPid", 404);
           if (!svc.cwd) return fail("working directory unknown, cannot restart");
-          spec = matchPinned(svc, pinnedList) ?? { id: logIdFor(svc), cwd: svc.cwd, command: svc.command };
+          const pinned = matchPinned(svc, pinnedList);
+          if (!pinned && svc.commandLossy && body.confirm !== true) return fail("command needs confirmation", 409);
+          spec = pinned ?? { id: logIdFor(svc), cwd: svc.cwd, command: svc.command };
           pids = svc.pids;
         } else if (typeof body.id === "string") {
           const pinned = pinnedList.find((p) => p.id === body.id);

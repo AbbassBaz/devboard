@@ -219,6 +219,13 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     expect((await call("POST", "/api/restart", { rootPid: 64672 })).status).toBe(400);
   });
 
+  test("restart of an unmanaged lossy command needs confirm", async () => {
+    running = [{ ...docs, command: `bun -e 'console.log("a b")'`, commandLossy: true }];
+    const denied = await call("POST", "/api/restart", { rootPid: 64672 });
+    expect(denied.status).toBe(409);
+    expect((await denied.json()).error).toBe("command needs confirmation");
+  });
+
   test("logs 404 for an unknown id and the unknown route 404s", async () => {
     expect((await call("GET", "/api/logs/nothing-here")).status).toBe(404);
     expect((await call("GET", "/api/whatever")).status).toBe(404);

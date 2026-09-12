@@ -27,6 +27,7 @@ let addOpen = false;
 let toastText = "";
 let editingId = null;
 let editingProjectId = null;
+let restartAfterSave = null;
 let clock = nowClock();
 let toastTimer = 0;
 let lastLogSig = "";
@@ -112,6 +113,9 @@ function closeSheet() {
   hideSheets();
   editingId = null;
   editingProjectId = null;
+  restartAfterSave = null;
+  const note = $("#f-lossy-note");
+  if (note) note.hidden = true;
 }
 function openSheet(id) {
   closeMenu();
@@ -564,6 +568,11 @@ async function restart(s) {
     await api("POST", "/api/restart", s.rootPid ? { rootPid: s.rootPid } : { id: s.id });
   } catch (e) {
     clearBusy(s.id);
+    if (e.status === 409 && /confirmation/i.test(e.message)) {
+      restartAfterSave = s;
+      await openEdit(s, { lossy: true });
+      return;
+    }
     toast(e.message);
   }
   refresh();
@@ -606,7 +615,7 @@ function toggleAdd() {
   }
 }
 
-async function openEdit(s) {
+async function openEdit(s, opts = {}) {
   editingId = s.id;
   const f = $("#editForm");
   f.reset();
@@ -619,7 +628,8 @@ async function openEdit(s) {
   f.elements.envText.value = formatEnv(s.env);
   f.elements.restartOnCrash.checked = !!s.restartOnCrash;
   $("#formTitle").textContent = `Edit ${s.name}`;
-  $("#formError").textContent = "";
+  $("#f-lossy-note").hidden = !opts.lossy;
+  $("#formError").textContent = opts.lossy ? "Check quoting before this restart runs." : "";
   loadSuggest(s.cwd, "#f-suggest", "#f-cmd", "#f-port");
   openSheet("sheet-edit");
   if (s.pinned && s.id) {
@@ -1136,8 +1146,17 @@ $("#editForm").onsubmit = async (ev) => {
   const data = Object.fromEntries(new FormData(f));
   const body = { name: data.name, cwd: data.cwd, command: data.command, port: Number(data.port), healthUrl: data.healthUrl, envText: data.envText, restartOnCrash: f.elements.restartOnCrash.checked };
   try {
-    await api("PUT", `/api/pinned/${encodeURIComponent(editingId)}`, body);
+    const pending = restartAfterSave;
+    let id = editingId;
+    if (pending && !pending.pinned) {
+      const created = await api("POST", "/api/pinned", body);
+      id = created.pinned?.id ?? id;
+    } else {
+      await api("PUT", `/api/pinned/${encodeURIComponent(editingId)}`, body);
+    }
+    restartAfterSave = null;
     closeSheet();
+    if (pending) await api("POST", "/api/restart", { id });
     refresh();
   } catch (e) { $("#formError").textContent = e.message; }
 };
