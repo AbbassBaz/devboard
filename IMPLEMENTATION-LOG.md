@@ -1,7 +1,7 @@
 # Implementation log
 
 Plan: `suggestions/final-plan.md`  
-Branch: `plan/tier-2` (Tier 1 merged to main as `327e050`)  
+Branch: `plan/tier-3` (Tier 2 merged to main as `a09ae07`)  
 Baseline: `bun test` — 133 pass, 0 fail (2026-09-11). After Tier 1: 144. No linter.
 
 Precondition: landed uncommitted fonts, fixture scrub, project links, and worktree pin copying as `91f5dc7`.
@@ -28,7 +28,7 @@ Precondition: landed uncommitted fonts, fixture scrub, project links, and worktr
 | F-18 | Validate hand-edited registry JSON and serialize writes | done | Skip bad entries and log one line. GET leaves a `{ "nope": true }` file untouched. Per-path write queue + unique tmp names; 20 concurrent adds keep all 20. |
 | F-19 | Reconcile AGENTS.md with the new direction and add CONTRIBUTING.md | done | Loopback-only wording; design.md is the current spec and can be amended in-PR. CONTRIBUTING.md covers the four gotchas. |
 | F-20 | Refuse to retire a worktree while a server runs in it | done | Retire and orphan-remove 409 with names while running or starting under the path. Toast offers Stop and retire. Main-worktree protection unchanged. Browser: starting `wt-sleep` in a throwaway worktree blocked Retire; Stop and retire killed it and removed the checkout. |
-| F-21 | Give saved services an identity that survives name collisions | todo | Tier 3 — waiting |
+| F-21 | Give saved services an identity that survives name collisions | done | `add` suffixes on id collision when cwd differs. `replace` keeps the id. Same cwd+port pin replaces in place. Existing `services.json` loads unchanged. |
 | F-22 | CLI parity, `--json`, and a `doctor` command | todo | Tier 3 — waiting |
 | F-23 | Shareable pin template checked into a project | todo | Tier 3. Human: scan automatically via a button |
 | F-24 | Point the tray at the same board as the CLI, and read the version from package.json | todo | Tier 3 — waiting |

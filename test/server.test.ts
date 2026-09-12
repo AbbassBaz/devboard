@@ -106,11 +106,30 @@ describe("POST /api/pinned (hand-entered server)", () => {
     await registry.save([{ id: "dash-3001", name: "dash", cwd: home, command: "npm exec next dev --port 3001", port: 3001 }]);
     const res = await call("PUT", "/api/pinned/dash-3001", { name: "dashboard", cwd: home, command: "npm exec -- next dev --port 3001", port: 3001 });
     expect(res.status).toBe(200);
-    expect((await res.json()).pinned).toEqual({ id: "dashboard-3001", name: "dashboard", cwd: home, command: "npm exec -- next dev --port 3001", port: 3001 });
-    expect((await registry.load()).map((p) => p.id)).toEqual(["dashboard-3001"]);
-    expect((await call("PUT", "/api/pinned/dash-3001", { name: "x", cwd: home, command: "true", port: 1 })).status).toBe(404);
-    expect((await call("PUT", "/api/pinned/dashboard-3001", { name: "x", cwd: home, command: "true", port: 0 })).status).toBe(400);
+    expect((await res.json()).pinned).toEqual({ id: "dash-3001", name: "dashboard", cwd: home, command: "npm exec -- next dev --port 3001", port: 3001 });
+    expect((await registry.load()).map((p) => p.id)).toEqual(["dash-3001"]);
+    expect((await call("PUT", "/api/pinned/missing", { name: "x", cwd: home, command: "true", port: 1 })).status).toBe(404);
+    expect((await call("PUT", "/api/pinned/dash-3001", { name: "x", cwd: home, command: "true", port: 0 })).status).toBe(400);
     await registry.save([]);
+  });
+
+  test("two web:3000 pins in different folders start independently", async () => {
+    running = [];
+    const a = join(home, "web-a");
+    const b = join(home, "web-b");
+    mkdirSync(a);
+    mkdirSync(b);
+    const first = await call("POST", "/api/pinned", { name: "web", cwd: a, command: "echo a; exit 0", port: 3000 });
+    const second = await call("POST", "/api/pinned", { name: "web", cwd: b, command: "echo b; exit 0", port: 3000 });
+    expect((await first.json()).pinned.id).toBe("web-3000");
+    expect((await second.json()).pinned.id).toBe("web-3000-2");
+    const startA = await call("POST", "/api/start", { id: "web-3000" });
+    const startB = await call("POST", "/api/start", { id: "web-3000-2" });
+    expect(startA.status).toBe(200);
+    expect(startB.status).toBe(200);
+    spawned.push((await startA.json()).pid, (await startB.json()).pid);
+    await registry.unpin("web-3000");
+    await registry.unpin("web-3000-2");
   });
 
   test("rejects missing fields, bad ports and folders that do not exist", async () => {
