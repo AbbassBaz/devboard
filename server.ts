@@ -246,7 +246,7 @@ export function createHandler(deps: Deps): BoardHandler {
       if (method === "GET" && pathname === "/") {
         return new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
       }
-      if (method === "GET" && (pathname === "/app.css" || pathname === "/app.js")) {
+      if (method === "GET" && (pathname === "/app.css" || pathname === "/app.js" || pathname === "/log-view.js")) {
         const file = Bun.file(new URL(`./public${pathname}`, import.meta.url));
         if (!(await file.exists())) return fail("not found", 404);
         return new Response(file, {

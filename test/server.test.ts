@@ -59,6 +59,10 @@ describe("GET /", () => {
     expect(js.status).toBe(200);
     expect(js.headers.get("content-type")).toContain("javascript");
     expect(await js.text()).toContain("/api/services");
+    const view = await call("GET", "/log-view.js");
+    expect(view.status).toBe(200);
+    expect(view.headers.get("content-type")).toContain("javascript");
+    expect(await view.text()).toContain("export function visibleEntries");
   });
 });
 

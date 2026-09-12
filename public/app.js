@@ -1,3 +1,5 @@
+import { entryBody, entryTid, errorIndexes, formatLogTime, lineKind, matchesEntry, visibleEntries } from "./log-view.js";
+
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -130,26 +132,6 @@ function openSheet(id) {
   $(`#${id}`).hidden = false;
 }
 
-function lineKind(e) {
-  if (e.marker) return "mark";
-  if (e.level === "error") return "err";
-  if (e.level === "warn") return "warn";
-  if (e.level === "info") return "ok";
-  return "";
-}
-function isLogErr(entry) { return entry?.level === "error"; }
-/** The line without the time it printed. `entry.time` is a prefix of `entry.text`. */
-function entryBody(e) {
-  const text = e?.text ?? "";
-  if (!e?.time) return text;
-  const i = text.indexOf(e.time);
-  return i < 0 ? text : text.slice(i + e.time.length).trimStart();
-}
-/** The JSON request id the server lifted, shown as a small label on a JSON line. */
-function entryTid(e) {
-  return e?.text?.startsWith("{") ? (e.ids ?? [])[0] ?? "" : "";
-}
-
 function linkIds(text, all) {
   // A composite token (a traceparent holds the trace id) is not worth tracing on its own: link the part.
   const own = all ?? [];
@@ -242,15 +224,6 @@ async function jumpToHit(id, i) {
   document.getElementById(`log-${id}-${i}`)?.scrollIntoView({ block: "center" });
 }
 
-function formatLogTime(t) {
-  if (!t) return "";
-  const iso = Date.parse(t);
-  if (!Number.isNaN(iso) && /^\d{4}-\d{2}-\d{2}/.test(t)) {
-    return new Date(iso).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  }
-  const m = t.match(/(\d{2}:\d{2}:\d{2})/);
-  return m ? m[1] : t;
-}
 function errTotal() {
   return latest.filter((s) => s.kind === "dev" && !s.hidden).reduce((n, s) => n + (s.errorCount ?? 0), 0);
 }
@@ -523,19 +496,18 @@ function setFollow(on) {
   newSinceFollow = 0;
 }
 
-function matchesView(e) {
-  const q = logFilter.trim().toLowerCase();
-  return (!q || e.text.toLowerCase().includes(q)) && (!errOnly || e.level === "error");
+/** What `visibleEntries`, `matchesEntry`, and the level chips read. */
+function viewState() {
+  return { filter: logFilter, errOnly };
 }
-function shownLogs(s) {
-  return entriesOf(s?.id).filter(matchesView);
+function shownEntries(s) {
+  return visibleEntries(entriesOf(s?.id), viewState());
 }
 
 function paintLogTools(s) {
   const raw = entriesOf(s?.id);
-  const base = baseOf(s?.id);
-  const errIdx = raw.map((l, i) => (isLogErr(l) ? base + i : -1)).filter((i) => i >= 0);
-  const shown = shownLogs(s);
+  const errIdx = errorIndexes(raw, baseOf(s?.id));
+  const shown = shownEntries(s);
   const chip = $("#errChip");
   const followBtn = $("#followBtn");
   const tracing = !!trace;
@@ -634,7 +606,7 @@ function rebuildBody(s) {
     return;
   }
   const raw = entriesOf(s.id);
-  const shown = shownLogs(s);
+  const shown = shownEntries(s);
   const unmanaged = s.status === "running" && !s.hasLog && !raw.length;
   const filteredEmpty = raw.length && !shown.length;
 
@@ -673,7 +645,7 @@ function appendToLog(s, added, base) {
     paintLogBody(s);
     return;
   }
-  const visible = added.filter(matchesView);
+  const visible = added.filter((e) => matchesEntry(e, viewState()));
   if (visible.length) {
     const html = visible.map((e) => logLineHtml(s, e, showTime)).join("");
     const caret = body.querySelector(".caret");
@@ -735,9 +707,7 @@ function select(id) {
 function nextErr() {
   const s = selected();
   if (!s) return;
-  const raw = entriesOf(s.id);
-  const base = baseOf(s.id);
-  const idx = raw.map((l, i) => (isLogErr(l) ? base + i : -1)).filter((i) => i >= 0);
+  const idx = errorIndexes(entriesOf(s.id), baseOf(s.id));
   if (!idx.length) return;
   const cur = errCursor == null ? -1 : errCursor;
   const next = idx.find((i) => i > cur) ?? idx[0];

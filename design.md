@@ -1,6 +1,8 @@
 # Graphite workspace
 
-Standing UI rules for `public/index.html`, `public/app.js`, and `public/app.css`. Match the tokens, shell, and behaviour here; if they need to change, amend this file in the same PR and say why. Vanilla JS + Bun, no frameworks. No server changes for UI work; wire actions to the existing `/api/*` endpoints.
+Standing UI rules for `public/index.html`, `public/app.js`, `public/log-view.js`, and `public/app.css`. Match the tokens, shell, and behaviour here; if they need to change, amend this file in the same PR and say why. Vanilla JS + Bun, no frameworks. No server changes for UI work; wire actions to the existing `/api/*` endpoints.
+
+`index.html` loads `app.js` as an ES module, so it can import `log-view.js`, which holds the log pane's pure logic (`LogEntry[]` and view state in, arrays out) and is covered by `bun test`. Still no build step: the browser does the importing and the server serves the two files as they are.
 
 ## Principles
 
