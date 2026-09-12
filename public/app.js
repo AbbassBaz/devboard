@@ -4,10 +4,6 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const home = (p) => (p ? p.replace(/^\/Users\/[^/]+/, "~") : "");
 const nowClock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
-const RE_MARK = /^===|^\$ |^> /;
-const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
-const LOG_TS = /^(\s*(?:\[[^\]]{6,32}\]|\d{4}-\d{2}-\d{2}[T ][\d:.Z+-]+|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*)/;
-
 let latest = [];
 let projects = [];
 let presets = [];
@@ -132,71 +128,30 @@ function openSheet(id) {
   $(`#${id}`).hidden = false;
 }
 
-function stripAnsi(s) { return String(s ?? "").replace(ANSI_RE, ""); }
-function lineKind(level, text) {
-  if (level === "error") return "err";
-  if (level === "warn") return "warn";
-  if (RE_MARK.test(stripAnsi(text))) return "mark";
-  if (level === "info") return "ok";
+function lineKind(e) {
+  if (e.marker) return "mark";
+  if (e.level === "error") return "err";
+  if (e.level === "warn") return "warn";
+  if (e.level === "info") return "ok";
   return "";
 }
-function isLogErr(entry) { return (typeof entry === "object" ? entry.level : null) === "error"; }
-function logText(entry) { return typeof entry === "string" ? entry : (entry?.text ?? ""); }
-function splitLogLine(raw) {
-  const text = stripAnsi(raw);
-  const m = LOG_TS.exec(text);
-  return m ? { time: m[1].trim(), body: text.slice(m[0].length) } : { time: "", body: text };
+function isLogErr(entry) { return entry?.level === "error"; }
+/** The line without the time it printed. `entry.time` is a prefix of `entry.text`. */
+function entryBody(e) {
+  const text = e?.text ?? "";
+  if (!e?.time) return text;
+  const i = text.indexOf(e.time);
+  return i < 0 ? text : text.slice(i + e.time.length).trimStart();
 }
-const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-const TRACEPARENT_RE = /\b[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}\b/gi;
-const REQ_ID_RE = /\breq[-_][a-z0-9][-a-z0-9]*/gi;
-const HEX_ID_RE = /\b[0-9a-f]{16,}\b/gi;
-const JSON_TRACE_KEYS = ["requestId", "reqId", "traceId", "trace_id", "correlationId", "x-request-id"];
-
-function jsonTraceIds(raw) {
-  const t = stripAnsi(raw).trim();
-  if (!(t.startsWith("{") && t.endsWith("}"))) return [];
-  try {
-    const v = JSON.parse(t);
-    if (!v || typeof v !== "object" || Array.isArray(v)) return [];
-    return JSON_TRACE_KEYS.map((k) => v[k]).filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
-  } catch { return []; }
+/** The JSON request id the server lifted, shown as a small label on a JSON line. */
+function entryTid(e) {
+  return e?.text?.startsWith("{") ? (e.ids ?? [])[0] ?? "" : "";
 }
 
-function findIds(raw) {
-  const text = stripAnsi(raw);
-  const out = [];
-  const add = (s) => { if (s && !out.includes(s)) out.push(s); };
-  for (const id of jsonTraceIds(text)) add(id);
-  const take = (re) => {
-    const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
-    return [...text.matchAll(r)].map((m) => ({ value: m[0], start: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
-  };
-  const uuids = take(UUID_RE);
-  const tps = take(TRACEPARENT_RE);
-  for (const m of uuids) add(m.value);
-  for (const m of take(REQ_ID_RE)) add(m.value);
-  for (const m of tps) { add(m.value); add(m.value.split("-")[1] || ""); }
-  const covered = [...uuids, ...tps];
-  for (const m of take(HEX_ID_RE)) {
-    if (covered.some((c) => m.start >= c.start && m.end <= c.end)) continue;
-    add(m.value);
-  }
-  return out;
-}
-
-function clickableIds(raw) {
-  const json = jsonTraceIds(raw);
-  return findIds(raw).filter((t) =>
-    json.includes(t)
-    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t)
-    || /^req[-_]/i.test(t)
-    || /^[0-9a-f]{16,}$/i.test(t)
-  );
-}
-
-function linkIds(text) {
-  const ids = clickableIds(text).slice().sort((a, b) => b.length - a.length);
+function linkIds(text, all) {
+  // A composite token (a traceparent holds the trace id) is not worth tracing on its own: link the part.
+  const own = all ?? [];
+  const ids = own.filter((id) => !own.some((other) => other !== id && id.includes(other))).sort((a, b) => b.length - a.length);
   if (!ids.length) return esc(text);
   const spans = [];
   for (const id of ids) {
@@ -359,7 +314,8 @@ function optimisticStartLines(s) {
 }
 
 function appendStartLines(s) {
-  logs[s.id] = [...(logs[s.id] || []), ...optimisticStartLines(s).map((text) => ({ text, level: "other" }))];
+  const prev = logs[s.id] || [];
+  logs[s.id] = [...prev, ...optimisticStartLines(s).map((text, k) => ({ i: prev.length + k, text, level: "other" }))];
 }
 
 async function loadSuggest(dir, boxId, cmdId, portId) {
@@ -547,10 +503,9 @@ function paintLogHead() {
 }
 
 function shownLogs(s) {
-  const raw = (s && logs[s.id]) || [];
+  const entries = (s && logs[s.id]) || [];
   const q = logFilter.trim().toLowerCase();
-  return raw.map((entry, i) => ({ raw: logText(entry), i, text: stripAnsi(logText(entry)), level: entry.level }))
-    .filter((l) => (!q || l.text.toLowerCase().includes(q)) && (!errOnly || l.level === "error"));
+  return entries.filter((e) => (!q || e.text.toLowerCase().includes(q)) && (!errOnly || e.level === "error"));
 }
 
 function paintLogTools(s) {
@@ -606,14 +561,11 @@ function paintTraceBody() {
   ).join("");
   const blocks = groups.map((g) => {
     const hits = g.hits.map((h) => {
-      const { time, body: rest } = splitLogLine(h.line);
-      const kind = lineKind(h.level, h.line);
-      const t = formatLogTime(time);
-      const display = rest || stripAnsi(h.line);
-      return `<div class="log-line ${kind}" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${h.i}" title="Open this log at this line">
+      const t = formatLogTime(h.time);
+      return `<div class="log-line ${lineKind(h)}" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${h.i}" title="Open this log at this line">
       <span class="ln">${h.i + 1}</span>
       ${t ? `<span class="t">${esc(t)}</span>` : ""}
-      <span>${linkIds(display)}</span>
+      <span>${linkIds(entryBody(h), h.ids)}</span>
     </div>`;
     }).join("");
     return `<div class="trace-group"><div class="trace-svc">${esc(nameOf(g.id))}</div>${hits}</div>`;
@@ -639,7 +591,7 @@ function paintLogBody(s) {
   const shown = shownLogs(s);
   const unmanaged = s.status === "running" && !s.hasLog && !raw.length;
   const filteredEmpty = raw.length && !shown.length;
-  const sig = [s.id, raw.length, logText(raw.at(-1) ?? ""), logFilter, errOnly, errCursor, jumpLine, s.status, rowState(s), follow].join("|");
+  const sig = [s.id, raw.length, raw.at(-1)?.text ?? "", logFilter, errOnly, errCursor, jumpLine, s.status, rowState(s), follow].join("|");
   if (sig === lastLogSig) {
     if (follow) body.scrollTop = body.scrollHeight;
     return;
@@ -664,19 +616,15 @@ function paintLogBody(s) {
     return;
   }
 
-  const times = shown.map((l) => formatLogTime(splitLogLine(l.raw).time));
-  const showTime = times.some(Boolean);
-  body.innerHTML = shown.map((l) => {
-    const { time, body: rest } = splitLogLine(l.raw);
-    const kind = lineKind(l.level, l.text);
-    const t = formatLogTime(time);
-    const display = (rest || l.text) || l.text;
-    const tid = jsonTraceIds(l.raw)[0];
-    return `<div class="log-line ${kind}${errCursor === l.i || jumpLine === l.i ? " cur" : ""}" data-i="${l.i}" id="log-${esc(s.id)}-${l.i}" title="Click to copy line">
-      <span class="ln">${l.i + 1}</span>
+  const showTime = shown.some((e) => formatLogTime(e.time));
+  body.innerHTML = shown.map((e) => {
+    const t = formatLogTime(e.time);
+    const tid = entryTid(e);
+    return `<div class="log-line ${lineKind(e)}${errCursor === e.i || jumpLine === e.i ? " cur" : ""}" data-i="${e.i}" id="log-${esc(s.id)}-${e.i}" title="Click to copy line">
+      <span class="ln">${e.i + 1}</span>
       ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
       ${tid ? `<span class="log-tid" title="request id">${esc(tid)}</span>` : ""}
-      <span>${linkIds(display)}</span>
+      <span>${linkIds(entryBody(e), e.ids)}</span>
     </div>`;
   }).join("") + (rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "");
 
@@ -1018,8 +966,8 @@ async function fetchLog(id, n = 4000) {
   const s = latest.find((x) => x.id === id);
   if (!s?.hasLog) return;
   try {
-    const { lines, levels } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=${n}`);
-    logs[id] = (lines || []).map((text, i) => ({ text, level: levels?.[i] || "other" }));
+    const { entries } = await api("GET", `/api/logs/${encodeURIComponent(id)}?lines=${n}`);
+    logs[id] = entries || [];
     if (id === sel) {
       if (trace) return;
       lastLogSig = "";
@@ -1053,8 +1001,8 @@ document.addEventListener("click", async (ev) => {
   const line = ev.target.closest(".log-line");
   if (line && !ev.target.closest("button") && line.dataset.act !== "trace-jump") {
     const s = selected();
-    const rec = logText((logs[s?.id] || [])[Number(line.dataset.i)]);
-    if (rec) copy(stripAnsi(rec).replace(LOG_TS, "").trim() || stripAnsi(rec));
+    const rec = (logs[s?.id] || [])[Number(line.dataset.i)];
+    if (rec) copy(entryBody(rec) || rec.text);
     return;
   }
 

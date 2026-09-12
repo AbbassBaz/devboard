@@ -1,0 +1,3 @@
+{"level":30,"time":1757556090123,"pid":4242,"hostname":"dev","name":"api","msg":"server listening","port":3001}
+{"level":50,"time":1757556091456,"pid":4242,"name":"api","msg":"request failed","reqId":"req-9f2c","status":500}
+{"level":40,"time":1757556092000,"name":"api","msg":"slow query","ms":1200}

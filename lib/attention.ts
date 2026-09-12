@@ -1,6 +1,7 @@
+import { classifyLine, cleanLine } from "./logs";
 import type { Alert, Service, WorktreeInfo } from "./types";
 
-const ERROR_LINE = /\b(error|fatal|panic|exception|econnrefused|enotfound|failed)\b/i;
+const isError = (line: string): boolean => classifyLine(line) === "error";
 
 export function collectAlerts(
   services: Service[],
@@ -35,8 +36,9 @@ export function collectAlerts(
   for (const s of services) {
     if (s.kind !== "dev" || s.status !== "stopped" || !s.hasLog || !s.id) continue;
     const lines = lastErrors.get(s.id) ?? [];
-    if (!lines.some((l) => ERROR_LINE.test(l))) continue;
-    const excerpt = lines.filter((l) => ERROR_LINE.test(l)).slice(-3).join(" · ");
+    const errors = lines.filter(isError);
+    if (!errors.length) continue;
+    const excerpt = errors.slice(-3).map(cleanLine).join(" · ");
     alerts.push({
       id: `exit-${s.id}`,
       kind: "exited",

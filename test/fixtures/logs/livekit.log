@@ -1,0 +1,15 @@
+===== 2026-09-12T04:37:54.477Z start in /tmp/agent: python3 main.py dev =====
+2026-09-12 04:37:56,585 - [36mDEBUG[0m asyncio - Using selector: KqueueSelector [90m[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - starting worker [90m{"version": "1.7.1", "rtc-version": "1.1.15"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.silero", "version": "1.7.1"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.openai", "version": "1.7.1"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.azure", "version": "1.7.1"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.elevenlabs", "version": "1.7.1"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.groq", "version": "1.7.1"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.speechmatics", "version": "1.7.1"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.cartesia", "version": "1.7.1"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.deepgram", "version": "1.7.1"}[0m
+2026-09-12 04:37:56,585 - [32mINFO[0m livekit.agents - plugin registered [90m{"plugin": "livekit.plugins.assemblyai", "version": "1.7.1"}[0m
+2026-09-12 04:37:57,132 - [32mINFO[0m livekit.agents - registered worker [90m{"agent_name": "demo-agent", "id": "AW_RFzJvTnUfJBJ", "region": "local", "protocol": 17}[0m
+2026-09-12 04:41:19,495 - [33mWARNING[0m livekit.agents - no warmed process available for job, waiting for one to be created [90m{"job_id": "AJ_KoCBi4ncsZZJ"}[0m
+2026-09-12 04:41:34,700 - [32mINFO[0m livekit.agents - process exiting [90m{"reason": "job completed", "pid": 72519}[0m

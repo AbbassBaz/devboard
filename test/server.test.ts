@@ -6,7 +6,7 @@ import { Control, isAlive, killTree } from "../lib/control";
 import { discover, scanProcesses } from "../lib/discover";
 import { Registry } from "../lib/registry";
 import { CrashWatch } from "../lib/restarts";
-import type { Process, RunningService, Service } from "../lib/types";
+import type { LogEntry, Process, RunningService, Service } from "../lib/types";
 import { createHandler } from "../server";
 
 const home = mkdtempSync(join(tmpdir(), "devboard-"));
@@ -196,7 +196,7 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     await Bun.sleep(300);
     const logs = await call("GET", "/api/logs/echo-1?lines=50");
     expect(logs.status).toBe(200);
-    expect((await logs.json()).lines).toContain("started-by-devboard");
+    expect((await logs.json()).entries.map((e: LogEntry) => e.text)).toContain("started-by-devboard");
   });
 
   test("start refuses when the pinned service is already running", async () => {
@@ -234,7 +234,7 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
   test("DELETE /api/logs/:id clears a captured log", async () => {
     const cleared = await call("DELETE", "/api/logs/echo-1");
     expect(cleared.status).toBe(200);
-    expect((await (await call("GET", "/api/logs/echo-1")).json()).lines.some((l: string) => l.includes("cleared"))).toBe(true);
+    expect((await (await call("GET", "/api/logs/echo-1")).json()).entries.some((e: LogEntry) => e.marker?.type === "cleared")).toBe(true);
     expect((await call("DELETE", "/api/logs/nothing-here")).status).toBe(404);
   });
 
@@ -243,15 +243,17 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     const path = control.logPath("follow-1");
     writeFileSync(path, Array.from({ length: 150 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
     const first = await (await call("GET", "/api/logs/follow-1?from=0")).json();
-    expect(first.lines).toHaveLength(150);
+    expect(first.entries).toHaveLength(150);
+    expect(first.lines).toBeUndefined();
+    expect(first.levels).toBeUndefined();
     writeFileSync(path, Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n") + "\nsame\nsame\n");
     const second = await (await call("GET", `/api/logs/follow-1?from=${first.next}`)).json();
-    expect(second.lines[0]).toBe("line 151");
-    expect(second.lines.slice(-2)).toEqual(["same", "same"]);
+    expect(second.entries[0]).toMatchObject({ i: 0, text: "line 151" });
+    expect(second.entries.slice(-2).map((e: LogEntry) => e.text)).toEqual(["same", "same"]);
     expect((await call("DELETE", "/api/logs/follow-1")).status).toBe(200);
     const after = await (await call("GET", `/api/logs/follow-1?from=${second.next}`)).json();
     expect(after.reset).toBe(true);
-    expect(after.lines.some((l: string) => l.includes("cleared"))).toBe(true);
+    expect(after.entries.some((e: LogEntry) => e.marker?.type === "cleared")).toBe(true);
   });
 
   test("GET /api/services counts classifyLine errors from the log", async () => {
@@ -262,7 +264,9 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     const body = await (await call("GET", "/api/services")).json();
     expect(body.services.find((s: Service) => s.id === "errs-39890")).toMatchObject({ errorCount: 2 });
     const log = await (await call("GET", "/api/logs/errs-39890?lines=50")).json();
-    expect(log.levels.filter((l: string) => l === "error")).toHaveLength(2);
+    expect(log.entries.filter((e: LogEntry) => e.level === "error")).toHaveLength(2);
+    expect(log.lines).toBeUndefined();
+    expect(log.levels).toBeUndefined();
   });
 
   test("log ids cannot escape the log directory", async () => {
@@ -286,9 +290,9 @@ describe("POST /api/start, /api/restart and GET /api/logs/:id", () => {
     const body = await res.json();
     expect(body.token).toBe(uuid);
     expect(body.groups.map((g: { id: string }) => g.id)).toEqual(["web-3000", "api-3001", "worker-3004"]);
-    expect(body.groups[0].hits).toEqual([{ i: 1, line: `GET / click ${uuid}`, level: "other" }]);
-    expect(body.groups[1].hits[0]).toMatchObject({ i: 0, level: "other" });
-    expect(body.groups[2].hits).toEqual([{ i: 0, line: `job ${uuid} done`, level: "other" }]);
+    expect(body.groups[0].hits).toEqual([{ i: 1, text: `GET / click ${uuid}`, level: "other", ids: [uuid] }]);
+    expect(body.groups[1].hits[0]).toMatchObject({ i: 0, level: "other", msg: "load" });
+    expect(body.groups[2].hits).toEqual([{ i: 0, text: `job ${uuid} done`, level: "other", ids: [uuid] }]);
     expect((await call("GET", "/api/trace")).status).toBe(400);
     expect((await call("GET", `/api/trace?token=${uuid}`)).status).toBe(400);
   });
@@ -573,7 +577,7 @@ describe("healthUrl, ports, presets and attention", () => {
     spawned.push((await started.json()).pid);
     await Bun.sleep(300);
     const log = await (await call("GET", "/api/logs/envy-39894?lines=50")).json();
-    expect(log.lines).toContain("API_KEY=secret-value");
+    expect(log.entries.map((e: LogEntry) => e.text)).toContain("API_KEY=secret-value");
     await registry.unpin("envy-39894");
   });
 

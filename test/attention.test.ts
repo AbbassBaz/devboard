@@ -38,6 +38,20 @@ describe("collectAlerts", () => {
     expect(alerts[0].detail).toContain("ECONNREFUSED");
   });
 
+  test("uses classifyLine, so a 500 and an exit status count and colour codes do not leak", () => {
+    const alerts = collectAlerts([
+      svc({ id: "api-1", name: "api", status: "stopped", hasLog: true, readiness: "stopped" }),
+    ], [], 0, new Map([["api-1", [
+      " GET /health 200 in 3ms",
+      " GET /api/x 500 in 34ms",
+      "\x1b[31mExit status 1\x1b[0m",
+    ]]]));
+    expect(alerts[0].detail).toContain("GET /api/x 500");
+    expect(alerts[0].detail).toContain("Exit status 1");
+    expect(alerts[0].detail).not.toContain("\x1b");
+    expect(alerts[0].detail).not.toContain("/health");
+  });
+
   test("lists dirty linked worktrees and a bloated log directory", () => {
     const alerts = collectAlerts([], [
       wt({ path: "/repo", main: true, dirty: true, branch: "main" }),

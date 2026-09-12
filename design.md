@@ -116,7 +116,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 **Body** (`10px 16px 20px`, mono 12 / 1.6, `#c3c8d1`):
 - Every line is cleaned before it is rendered: CSI, OSC, and single-character escape sequences removed and a `\r` progress bar resolved to its last frame (`cleanLine` in `lib/logs.ts`). No raw control byte — `[?25h` and friends — ever reaches the pane, and a download bar shows one line, not every frame.
 - Line: flex, gap 14, pad `0 8px`, margin `0 -8px`, radius 3, `cursor: copy`; hover `#1f232a`. Columns: ln 30px right `#4a5160` · time `#5d636e` · text.
-- Color by `classifyLine` in `lib/logs.ts` (the page uses the `level` from `GET /api/logs/:id`): error → `#f28b82` on `rgba(229,83,75,.1)`; warn → `#e2b96a`; info → `#8fd3a6`; markers `/^===|^\$ |^> /` → dim. Error pills and the top-bar count use `errorCount` from `GET /api/services`.
+- Color by `entry.level` from `GET /api/logs/:id`: error → `#f28b82` on `rgba(229,83,75,.1)`; warn → `#e2b96a`; info → `#8fd3a6`; a devboard marker (`entry.marker`) → dim. The level is decided once, on the server, by `classifyLine` in `lib/logs.ts`: a tagged level (a `LEVEL logger - msg` prefix or a JSON `level` field) first, then the HTTP status (5xx error, 4xx warn), then the word heuristics. Error pills and the top-bar count use `errorCount` from `GET /api/services`, which reads the same classifier.
 - Current error: `box-shadow: inset 2px 0 0 #e5534b`.
 - Blinking 7×14 accent caret at the tail while running (1s steps).
 - Empty (Plex, dim, max 520): stopped → “*name* is stopped…” + Start; unmanaged running → “Started outside devboard…”; filtered → “Nothing matches the current filter.”
@@ -145,11 +145,11 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 ## State
 
-`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logFilter`, `errOnly`, `follow`, `errCursor`, `jumpLine`, `trace` (`null|{token, groups}`), `menu` (`null|"top"|"log"`), `addOpen`, `toast`, `logs{id: lines[]}`.
+`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logFilter`, `errOnly`, `follow`, `errCursor`, `jumpLine`, `trace` (`null|{token, groups}`), `menu` (`null|"top"|"log"`), `addOpen`, `toast`, `logs{id: LogEntry[]}`.
 
 ## Endpoints
 
-`/api/services`, `/api/logs/:id`, `/api/trace`, `/api/start`, `/api/restart`, `/api/kill`, `/api/pin`, `/api/pinned`, `/api/projects/:id/start|stop|members`, `/api/suggest`, `/api/import`, `/api/open`, plus existing worktrees / presets / attention / env / ignore routes for the sheet features.
+`/api/services`, `/api/logs/:id` (returns `LogTail`: `entries: LogEntry[]` parsed by `lib/logs.ts`, plus `path`, `size`, `next`, `reset`; there is no `lines` or `levels` array), `/api/trace` (hits are `LogEntry`), `/api/start`, `/api/restart`, `/api/kill`, `/api/pin`, `/api/pinned`, `/api/projects/:id/start|stop|members`, `/api/suggest`, `/api/import`, `/api/open`, plus existing worktrees / presets / attention / env / ignore routes for the sheet features.
 
 ## Do not
 

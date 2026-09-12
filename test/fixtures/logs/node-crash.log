@@ -1,0 +1,11 @@
+⨯ Failed to start server
+Error: listen EADDRINUSE: address already in use :::3010
+    at <unknown> (Error: listen EADDRINUSE: address already in use :::3010)
+    at Server.setupListenHandle [as _listen2] (node:net:1904:16)
+    at listenInCluster (node:net:1961:12) {
+  code: 'EADDRINUSE',
+  errno: -48,
+  syscall: 'listen',
+  address: '::',
+  port: 3010
+}

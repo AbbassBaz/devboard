@@ -65,7 +65,7 @@ echo "[6] start from dashboard"; api POST /api/start '{"id":"devboard-3999"}'; e
 waitfor "curl -sf http://127.0.0.1:3999"; sleep 0.3; row
 STARTED=$(rootpid)
 check "api GET /api/services | grep -q '\"hasLog\":true'" "hasLog true"
-echo "    log tail:"; api GET '/api/logs/devboard-3999?lines=5' | bun -e 'const b = await new Response(Bun.stdin).json(); for (const l of b.lines ?? [String(b.error)]) console.log("    | " + l)'
+echo "    log tail:"; api GET '/api/logs/devboard-3999?lines=5' | bun -e 'const b = await new Response(Bun.stdin).json(); for (const l of b.entries?.map((e) => e.text) ?? [String(b.error)]) console.log("    | " + l)'
 
 echo "[7] stop devboard; the started service must survive (SIGTERM here; Ctrl-C in a terminal is SIGINT to the foreground group, which the detached child is not in)"
 kill -TERM "$DB" 2>/dev/null; wait "$DB" 2>/dev/null; DB=
