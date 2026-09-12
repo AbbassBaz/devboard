@@ -645,7 +645,30 @@ input, textarea { font: inherit; color: var(--fg); }
   text-overflow: ellipsis;
   max-width: 50%;
 }
+.toast:has(button) {
+  display: flex;
+  align-items: center;
+  overflow: visible;
+  max-width: 70%;
+}
+.toast .toast-msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .toast .d { color: var(--dim); }
+.toast button {
+  flex: none;
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .poll { margin-left: auto; }
 
 .overlay {

@@ -14,7 +14,7 @@ import { Registry } from "./lib/registry";
 import { CrashWatch } from "./lib/restarts";
 import { suggestCommands } from "./lib/suggest";
 import type { Pinned, ProjectLink, RunningService, Service, StartSpec, WorktreeInfo } from "./lib/types";
-import { createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
+import { blockingWorktreeServices, createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
 
@@ -102,6 +102,26 @@ export function createHandler(deps: Deps): BoardHandler {
     return refreshSnapshot();
   };
   const invalidate = () => { cached = null; };
+
+  const busyInWorktree = async (path: string) => {
+    const target = await resolved(expandHome(path.trim()));
+    const { services } = await snapshot();
+    const checked = await Promise.all(services.map(async (s) => ({
+      ...s,
+      cwd: s.cwd ? await resolved(s.cwd) : s.cwd,
+    })));
+    return blockingWorktreeServices(checked, target);
+  };
+
+  const refuseBusyWorktree = async (path: string) => {
+    const blockers = await busyInWorktree(path);
+    if (!blockers.length) return null;
+    return json({
+      error: "Stop and retire",
+      names: blockers.map((s) => s.name),
+      rootPids: blockers.flatMap((s) => (s.rootPid != null ? [s.rootPid] : [])),
+    }, 409);
+  };
 
   const withCrash = (services: Service[]) =>
     services.map((s) => {
@@ -473,6 +493,8 @@ export function createHandler(deps: Deps): BoardHandler {
       if (method === "POST" && pathname === "/api/worktrees/retire") {
         const { path, force } = await readBody(req);
         if (typeof path !== "string" || !path.trim()) return fail("path required");
+        const busy = await refuseBusyWorktree(path);
+        if (busy) return busy;
         return json(await retireWorktree(path, force === true));
       }
 
@@ -516,6 +538,8 @@ export function createHandler(deps: Deps): BoardHandler {
       if (method === "POST" && pathname === "/api/worktrees/remove") {
         const { path } = await readBody(req);
         if (typeof path !== "string" || !path.trim()) return fail("path required");
+        const busy = await refuseBusyWorktree(path);
+        if (busy) return busy;
         return json(await removeOrphanedWorktree(path));
       }
 

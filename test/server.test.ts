@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Control, isAlive, killTree } from "../lib/control";
@@ -320,6 +320,48 @@ describe("GET /api/worktrees and prune/remove", () => {
     expect(body.created[0].command).toBe(`echo launched --port ${body.created[0].port}`);
     expect(body.started[0].id).toBe(body.created[0].id);
     spawned.push(body.started[0].pid);
+  });
+
+  test("retire and remove 409 while a server runs in the checkout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "devboard-wt-busy-"));
+    const repo = join(root, "app");
+    const linked = join(root, "app-agent");
+    const orphan = join(root, "orphan");
+    const git = async (cwd: string, args: string[]) => {
+      const proc = Bun.spawn(["git", "-c", "user.name=devboard", "-c", "user.email=devboard@test", ...args], {
+        cwd, stdout: "ignore", stderr: "pipe",
+      });
+      const err = await new Response(proc.stderr).text();
+      if ((await proc.exited) !== 0) throw new Error(err);
+    };
+    await git(root, ["init", "-q", "app"]);
+    await git(repo, ["commit", "--allow-empty", "-qm", "init"]);
+    await git(repo, ["worktree", "add", "-q", "-b", "agent", linked]);
+
+    running = [{ ...docs, name: "api", cwd: linked, ports: [39980] }];
+    const busy = await call("POST", "/api/worktrees/retire", { path: linked });
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toMatchObject({ error: "Stop and retire", names: ["api"] });
+    expect(existsSync(linked)).toBe(true);
+
+    running = [];
+    expect((await call("POST", "/api/worktrees/retire", { path: linked })).status).toBe(200);
+    expect(existsSync(linked)).toBe(false);
+
+    const main = await call("POST", "/api/worktrees/retire", { path: repo });
+    expect(main.status).toBe(500);
+    expect((await main.json()).error).toMatch(/main worktree/);
+    expect(existsSync(repo)).toBe(true);
+
+    mkdirSync(orphan);
+    writeFileSync(join(orphan, ".git"), "gitdir: /no/such/repo/.git/worktrees/orphan\n");
+    running = [{ ...docs, name: "ghost", cwd: orphan, ports: [39981] }];
+    const blocked = await call("POST", "/api/worktrees/remove", { path: orphan });
+    expect(blocked.status).toBe(409);
+    expect(existsSync(orphan)).toBe(true);
+    running = [];
+    expect((await call("POST", "/api/worktrees/remove", { path: orphan })).status).toBe(200);
+    expect(existsSync(orphan)).toBe(false);
   });
 });
 

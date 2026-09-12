@@ -8,6 +8,13 @@ import { rewriteCommandPort, rewriteUrlPort } from "./suggest";
 
 export const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? homedir() + p.slice(1) : p);
 
+/** Running or starting rows whose cwd is the folder or a descendant. Paths should already be resolved. */
+export function blockingWorktreeServices(services: Service[], target: string): Service[] {
+  return services.filter((s) =>
+    (s.status === "running" || s.status === "starting") && underFolder(s.cwd, target),
+  );
+}
+
 export type WorktreeRecord = {
   path: string;
   head?: string;

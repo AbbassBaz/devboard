@@ -51,15 +51,29 @@ async function api(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
   return data;
 }
 
+let toastAction = null;
 function toast(msg, copied = false) {
+  toastAction = null;
   toastText = msg ? { text: String(msg), copied } : "";
   paintToast();
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastText = ""; paintToast(); }, 1600);
+  toastTimer = setTimeout(() => { toastText = ""; toastAction = null; paintToast(); }, 1600);
+}
+function toastBusyWorktree(names, rootPids, path, force, remove) {
+  toastAction = { rootPids, path, force, remove };
+  toastText = { text: `Stop and retire · ${names.join(", ")}`, copied: false };
+  paintToast();
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastText = ""; toastAction = null; paintToast(); }, 8000);
 }
 function copy(text) {
   const t = String(text ?? "");
@@ -69,9 +83,12 @@ function paintToast() {
   const el = $("#toast");
   el.hidden = !toastText;
   if (!toastText) { el.textContent = ""; return; }
-  el.innerHTML = toastText.copied
+  const label = toastText.copied
     ? `copied · <span class="d">${esc(toastText.text)}</span>`
     : esc(toastText.text);
+  el.innerHTML = toastAction
+    ? `<span class="toast-msg">${label}</span><button type="button" data-act="stop-retire">${toastAction.remove ? "Stop and remove" : "Stop and retire"}</button>`
+    : label;
 }
 
 function closeMenu() { if (menu) { menu = null; paintMenus(); } }
@@ -896,7 +913,15 @@ document.addEventListener("click", async (ev) => {
     }
     else if (act === "wt-remove") {
       if (!confirm(`Delete ${home(btn.dataset.path)}? It is an orphaned worktree folder, not a git repository.`)) return;
-      await api("POST", "/api/worktrees/remove", { path: btn.dataset.path });
+      try {
+        await api("POST", "/api/worktrees/remove", { path: btn.dataset.path });
+      } catch (e) {
+        if (e.status === 409 && e.data?.names) {
+          toastBusyWorktree(e.data.names, e.data.rootPids ?? [], btn.dataset.path, false, true);
+          return;
+        }
+        throw e;
+      }
       await scanWt();
     }
     else if (act === "wt-open") await api("POST", "/api/open", { path: btn.dataset.path });
@@ -915,6 +940,23 @@ document.addEventListener("click", async (ev) => {
         toast("No pinned servers in that checkout — add one on a free port.");
       }
     }
+    else if (act === "stop-retire") {
+      const pending = toastAction;
+      toastText = "";
+      toastAction = null;
+      paintToast();
+      if (!pending) return;
+      for (const pid of pending.rootPids ?? []) await api("POST", "/api/kill", { rootPid: pid });
+      const path = pending.remove ? "/api/worktrees/remove" : "/api/worktrees/retire";
+      const body = pending.remove ? { path: pending.path } : { path: pending.path, force: pending.force };
+      try {
+        await api("POST", path, body);
+      } catch (e) {
+        if (e.status === 409) await api("POST", path, body);
+        else throw e;
+      }
+      await scanWt();
+    }
     else if (act === "wt-retire") {
       const forceNeeded = btn.dataset.dirty === "1" || btn.dataset.locked === "1";
       if (!confirm(forceNeeded
@@ -923,6 +965,10 @@ document.addEventListener("click", async (ev) => {
       try {
         await api("POST", "/api/worktrees/retire", { path: btn.dataset.path, force: forceNeeded });
       } catch (e) {
+        if (e.status === 409 && e.data?.names) {
+          toastBusyWorktree(e.data.names, e.data.rootPids ?? [], btn.dataset.path, forceNeeded, false);
+          return;
+        }
         if (!forceNeeded && /uncommitted|locked/i.test(e.message) && confirm(`${e.message}. Force retire?`)) {
           await api("POST", "/api/worktrees/retire", { path: btn.dataset.path, force: true });
         } else throw e;
