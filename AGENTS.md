@@ -14,7 +14,7 @@ Loopback only by design; no remote mode or auth.
 bun install
 bun run start                 # server + menu bar extra
 bun run dev                   # restarts on file change
-bun test                      # 227 tests, ~10s, one live test spawns a real process on :39999
+bun test                      # 260 tests, ~10s, one live test spawns a real process on :39999
 bash scripts/smoke.sh         # end-to-end against a real board; needs :4242 and :3999 free
 bun run devboard -- <cmd>     # CLI without installing
 bun run setup                 # symlink `devboard` into ~/.local/bin, build + install the tray app
