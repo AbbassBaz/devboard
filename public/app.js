@@ -1,7 +1,7 @@
 import {
   compileFilter, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans,
-  idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, markerLabel, matchesEntry, matchIndexes,
-  matchSpans, mergeSpans, prettyCtx, runBoundaries, unreadLabel, visibleEntries, visibleGroups,
+  findLinks, idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, markerLabel, matchesEntry,
+  matchIndexes, matchSpans, mergeSpans, prettyCtx, runBoundaries, unreadLabel, visibleEntries, visibleGroups,
 } from "./log-view.js";
 
 const $ = (s) => document.querySelector(s);
@@ -165,6 +165,11 @@ function openSheet(id) {
 function spanHtml(span, inner) {
   if (span.kind === "id") return `<button type="button" class="log-id" data-token="${esc(span.value)}">${inner}</button>`;
   if (span.kind === "http") return `<span class="${esc(span.cls)}">${inner}</span>`;
+  if (span.kind === "link") return `<a class="log-url" href="${esc(span.value)}" target="_blank" rel="noreferrer">${inner}</a>`;
+  if (span.kind === "path") {
+    const at = [span.line ? `data-line="${span.line}"` : "", span.col ? `data-col="${span.col}"` : ""].join(" ");
+    return `<button type="button" class="log-path" data-act="open-path" data-path="${esc(span.value)}" ${at}>${inner}</button>`;
+  }
   return inner;
 }
 
@@ -191,7 +196,7 @@ function markUp(chunk, marks, offset) {
  * never overlap and ids win; marks nest inside whatever they land on.
  */
 function richText(text, entry, marks = []) {
-  const spans = mergeSpans([...idSpans(text, entry?.ids), ...httpSpans(text, entry?.http)]);
+  const spans = mergeSpans([...idSpans(text, entry?.ids), ...findLinks(text), ...httpSpans(text, entry?.http)]);
   let html = "";
   let cur = 0;
   for (const s of spans) {
@@ -743,6 +748,20 @@ function ctxBlock(e, key) {
     .map((t) => (t.kind ? `<span class="j-${esc(t.kind)}">${esc(t.text)}</span>` : esc(t.text)))
     .join("");
   return `<pre class="ctx">${tokens}</pre>`;
+}
+
+/** Open a `file:line:col` from a log line in the editor, resolved against the service's cwd. */
+async function openPath(data) {
+  const s = selected();
+  const body = { path: data.path, cwd: s?.cwd };
+  if (data.line) body.line = Number(data.line);
+  if (data.col) body.col = Number(data.col);
+  try {
+    const res = await api("POST", "/api/open", body);
+    toast(`${res.cmd} ${home(res.path || data.path)}`);
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 function entryByKey(id, key) {
@@ -1512,6 +1531,9 @@ document.addEventListener("click", async (ev) => {
 
   const lgBtn = ev.target.closest("button[data-act=logger]");
   if (lgBtn) { searchFor(lgBtn.dataset.logger || ""); return; }
+
+  const pathBtn = ev.target.closest("button[data-act=open-path]");
+  if (pathBtn) { openPath(pathBtn.dataset); return; }
 
   const line = ev.target.closest(".log-line");
   if (line && !ev.target.closest("button") && line.dataset.act !== "trace-jump") {

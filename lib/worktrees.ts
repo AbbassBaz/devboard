@@ -404,17 +404,31 @@ export async function retireWorktree(path: string, force = false): Promise<{ pat
   return { path: expanded };
 }
 
-export async function openInEditor(path: string): Promise<{ cmd: string }> {
+/**
+ * Where `POST /api/open` should look. A relative path — what a stack frame prints — hangs
+ * off the service's own `cwd`; an absolute one is taken as it is. Home expands either way.
+ */
+export function resolveOpenPath(path: string, cwd?: string): string {
+  const target = expandHome(String(path ?? "").trim());
+  if (!target) throw new Error("path required");
+  const base = cwd?.trim() ? expandHome(cwd.trim()) : "";
+  return isAbsolute(target) || !base ? resolve(target) : resolve(base, target);
+}
+
+/** Open a path, at a line and column when the log line carried them. */
+export async function openInEditor(path: string, line?: number, col?: number): Promise<{ cmd: string; path: string }> {
   const expanded = expandHome(path.trim());
   const info = await stat(expanded).catch(() => undefined);
   if (!info) throw new Error(`path does not exist: ${expanded}`);
-  const candidates = ["cursor", "code", "subl"];
-  for (const cmd of candidates) {
-    const proc = Bun.spawn([cmd, expanded], { stdout: "ignore", stderr: "ignore" });
+  const at = line ? `${expanded}:${line}${col ? `:${col}` : ""}` : expanded;
+  for (const cmd of ["cursor", "code", "subl"]) {
+    // `cursor` and `code` need `-g` for a line; `subl` takes `file:line:col` on its own.
+    const args = line ? (cmd === "subl" ? [at] : ["-g", at]) : [expanded];
+    const proc = Bun.spawn([cmd, ...args], { stdout: "ignore", stderr: "ignore" });
     const code = await proc.exited;
-    if (code === 0) return { cmd };
+    if (code === 0) return { cmd, path: expanded };
   }
   const open = Bun.spawn(["open", expanded], { stdout: "ignore", stderr: "ignore" });
   await open.exited;
-  return { cmd: "open" };
+  return { cmd: "open", path: expanded };
 }

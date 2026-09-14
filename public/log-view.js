@@ -429,6 +429,42 @@ export function idSpans(text, ids) {
   return spans;
 }
 
+const URL_RE = /https?:\/\/\S+/g;
+const FILE_RE = /(?:\.{1,2}\/|~\/|\/)?[\w@.\-/]+\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|rb|swift|css|scss|json|md|ya?ml)\b(?::\d+(?::\d+)?)?/g;
+/** Runtime-internal frames and vendored code: there is no file on disk worth opening. */
+const NOT_A_FILE = /^(?:node:|webpack-internal:|internal\/)|(?:^|\/)node_modules\//;
+const TRAILING = /[.,;:)\]}'"]+$/;
+
+/**
+ * The URLs and `file:line:col` references in a line, as spans. A URL opens in a tab; a file
+ * reference goes to `POST /api/open` with the service's `cwd`, so a relative path resolves.
+ */
+export function findLinks(text) {
+  const out = [];
+  const src = String(text ?? "");
+  for (const m of src.matchAll(URL_RE)) {
+    const value = m[0].replace(TRAILING, "");
+    if (!value) continue;
+    const start = m.index ?? 0;
+    out.push({ start, end: start + value.length, kind: "link", value });
+  }
+  for (const m of src.matchAll(FILE_RE)) {
+    const start = m.index ?? 0;
+    const raw = m[0];
+    if (out.some((s) => start >= s.start && start < s.end)) continue; // already inside a URL
+    // Judge the whole token, not the tail of it: `webpack-internal:///./src/app.tsx` is not a file.
+    let from = start;
+    while (from > 0 && !/[\s(]/.test(src[from - 1])) from--;
+    if (NOT_A_FILE.test(src.slice(from, start + raw.length))) continue;
+    const at = /^(.*?)(?::(\d+)(?::(\d+))?)?$/.exec(raw);
+    const span = { start, end: start + raw.length, kind: "path", value: at?.[1] ?? raw };
+    if (at?.[2]) span.line = Number(at[2]);
+    if (at?.[3]) span.col = Number(at[3]);
+    out.push(span);
+  }
+  return mergeSpans(out);
+}
+
 const SPAN_RANK = { id: 3, link: 2, path: 2, http: 1 };
 
 /** One set of non-overlapping spans in text order. A higher-ranked span wins the overlap. */

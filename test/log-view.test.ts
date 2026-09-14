@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseLine } from "../lib/logs";
 // The page's pure half. It must import with no DOM, which is the whole point of the file.
 import {
-  collapseRepeats, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, foldEntries, formatLogTime,
+  collapseRepeats, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, findLinks, foldEntries, formatLogTime,
   httpSpans, idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matches, matchesEntry,
   markerLabel, matchIndexes, matchSpans, mergeSpans, parseFilter, prettyCtx, relativeAge, runBoundaries,
   scopeStart, statusClass, unreadLabel, visibleEntries, visibleGroups,
@@ -182,6 +182,33 @@ describe("foldEntries and collapseRepeats", () => {
     const py = await fixtureEntries("python-traceback.log");
     // One stop for the whole traceback, and it is the line that printed it.
     expect(errorIndexes(py, 100)).toEqual([100]);
+  });
+});
+
+describe("findLinks", () => {
+  test("finds the URL and the file reference in a Next stack line", () => {
+    const text = "ready on http://localhost:3010, error at src/app/page.tsx:12:5 while building";
+    const spans = findLinks(text);
+    expect(spans.map((s) => s.kind)).toEqual(["link", "path"]);
+    expect(spans[0].value).toBe("http://localhost:3010");
+    expect(spans[1].value).toBe("src/app/page.tsx");
+    expect(spans[1].line).toBe(12);
+    expect(spans[1].col).toBe(5);
+    expect(text.slice(spans[1].start, spans[1].end)).toBe("src/app/page.tsx:12:5");
+  });
+
+  test("skips runtime internals and anything vendored", () => {
+    expect(findLinks("    at Module._compile (node:internal/modules/cjs/loader:1234)")).toEqual([]);
+    expect(findLinks("    at run (webpack-internal:///./src/app.tsx:3:1)")).toEqual([]);
+    expect(findLinks("    at x (/app/node_modules/next/dist/server.js:9:2)")).toEqual([]);
+    expect(findLinks("nothing here at all")).toEqual([]);
+  });
+
+  test("a line number is optional and trailing punctuation is not part of a URL", () => {
+    const spans = findLinks("see http://127.0.0.1:3010/health. config is ./devboard.json");
+    expect(spans[0].value).toBe("http://127.0.0.1:3010/health");
+    expect(spans[1].value).toBe("./devboard.json");
+    expect(spans[1].line).toBeUndefined();
   });
 });
 

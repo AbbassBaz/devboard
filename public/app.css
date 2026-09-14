@@ -740,6 +740,14 @@ pre.ctx .j-num { color: var(--ok); }
   cursor: pointer;
 }
 .log-id:hover { background: rgba(138, 180, 248, .22); }
+.log-url { color: var(--accent); font: inherit; }
+.log-path {
+  display: inline;
+  font: inherit;
+  color: var(--sec);
+  cursor: pointer;
+}
+.log-path:hover { color: var(--fg); text-decoration: underline; }
 .log-tid {
   flex: none;
   align-self: flex-start;
