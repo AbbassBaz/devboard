@@ -42,17 +42,61 @@ export function entryTid(entry) {
   return entry?.text?.startsWith("{") ? (entry.ids ?? [])[0] ?? "" : "";
 }
 
-/** Does this entry survive the current filter text and errors-only toggle? */
-export function matchesEntry(entry, state = {}) {
+export const LEVELS = ["error", "warn", "info", "debug", "other"];
+
+/** Is this entry's level one of the ones the Levels dropdown has checked? */
+export function inLevels(entry, levels) {
+  if (!levels) return true;
+  const has = typeof levels.has === "function" ? (l) => levels.has(l) : (l) => levels.includes(l);
+  return has(entry?.level ?? "other");
+}
+
+/** The scope filters: level, and nothing else that reads one line at a time. */
+function inScope(entry, state) {
+  return !!entry && inLevels(entry, state.levels);
+}
+
+/** The text filter. Plain substring until F-37 gives it a syntax. */
+function matchesSearch(entry, state) {
   const q = (state.filter ?? "").trim().toLowerCase();
-  if (q && !entry.text.toLowerCase().includes(q)) return false;
-  if (state.errOnly && entry.level !== "error") return false;
-  return true;
+  if (!q) return true;
+  return (entry?.text ?? "").toLowerCase().includes(q);
+}
+
+/** Does this entry survive the level set and the search text? */
+export function matchesEntry(entry, state = {}) {
+  return inScope(entry, state) && matchesSearch(entry, state);
+}
+
+/** Absolute line keys of the `start` markers: where each run of the process begins. */
+export function runBoundaries(entries, base = 0) {
+  const out = [];
+  for (const e of entries ?? []) {
+    if (e?.marker?.type === "start") out.push(base + e.i);
+  }
+  return out;
+}
+
+/**
+ * The first position the view shows: after a Clear (`viewStart`, an absolute key so a
+ * buffer trim cannot move it) and after the last `start` marker when This run is on.
+ */
+export function scopeStart(entries, state = {}) {
+  const list = entries ?? [];
+  const base = state.base ?? 0;
+  let from = 0;
+  if (state.viewStart != null) from = Math.max(from, state.viewStart - base);
+  if (state.runOnly) {
+    const runs = runBoundaries(list, base);
+    if (runs.length) from = Math.max(from, runs[runs.length - 1] - base);
+  }
+  return Math.max(0, Math.min(from, list.length));
 }
 
 /** The entries the pane shows, in file order. */
 export function visibleEntries(entries, state = {}) {
-  return (entries ?? []).filter((e) => matchesEntry(e, state));
+  const list = entries ?? [];
+  return list.slice(scopeStart(list, state)).filter((e) => matchesEntry(e, state));
 }
 
 /**
@@ -102,16 +146,20 @@ export function collapseRepeats(groups) {
   return out;
 }
 
-/** A group survives when its head does, or when the text filter hits a line folded under it. */
+/**
+ * A group is in scope when its head is; the search then hits the head or any line folded
+ * under it, so a search for `EADDRINUSE` shows the whole dump.
+ */
 export function groupMatches(group, state = {}) {
-  if (!group) return false;
-  if (matchesEntry(group.head, state)) return true;
-  return (group.tail ?? []).some((e) => matchesEntry(e, state));
+  if (!group || !inScope(group.head, state)) return false;
+  if (matchesSearch(group.head, state)) return true;
+  return (group.tail ?? []).some((e) => matchesSearch(e, state));
 }
 
 /** The groups the pane renders: folded, collapsed, and filtered, in file order. */
 export function visibleGroups(entries, state = {}) {
-  return collapseRepeats(foldEntries(entries)).filter((g) => groupMatches(g, state));
+  const list = entries ?? [];
+  return collapseRepeats(foldEntries(list.slice(scopeStart(list, state)))).filter((g) => groupMatches(g, state));
 }
 
 /** How many lines of each level are in the buffer. Levels with no lines read 0. */
@@ -128,12 +176,21 @@ export function levelCounts(entries) {
  * Absolute line keys (`base + position`) of the error lines, for the chip and `e`.
  * Heads only: the ten frames of one crash are one stop, not eleven.
  */
-export function errorIndexes(entries, base = 0) {
+export function errorIndexes(entries, base = 0, state = {}) {
   const out = [];
-  for (const g of collapseRepeats(foldEntries(entries))) {
+  for (const g of visibleGroups(entries, { ...state, base })) {
     if (g.head.level === "error") out.push(base + g.head.i);
   }
   return out;
+}
+
+/** What the Levels button reads, from the set it has checked. */
+export function levelsLabel(levels) {
+  const on = LEVELS.filter((l) => inLevels({ level: l }, levels));
+  if (on.length === LEVELS.length) return "All levels";
+  if (on.length === 1 && on[0] === "error") return "Errors";
+  if (on.length === 2 && on.includes("error") && on.includes("warn")) return "Errors · Warnings";
+  return "Custom";
 }
 
 /** The 3-character gutter badge. `other` has none, so a marker line stays quiet. */

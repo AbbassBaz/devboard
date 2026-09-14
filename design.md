@@ -8,7 +8,7 @@ Standing UI rules for `public/index.html`, `public/app.js`, `public/log-view.js`
 
 - Two jobs on one screen at all times: **see what's running** (sidebar) and **read its logs** (right pane).
 - One primary action per zone. Everything else lives in a `···` menu.
-- Error and follow controls appear only when relevant.
+- Error and freeze controls appear only when relevant; the level, search, freeze, and clear controls are always on the row.
 - Keyboard-first. Keys are ignored while an input is focused (`Esc` blurs).
 - Dense, IDE-like, dark. No grain, gradients, display type, or card-grid chrome.
 - Secondary surfaces (worktrees, projects, presets, attention, env, full edit) open as overlay sheets from the top-bar or log `···` menu — never as extra top-level views.
@@ -21,9 +21,9 @@ Dark, dense, keyboard-first. Three fixed rows: a 44px top bar, the workspace, an
 
 **Sidebar.** One row per dev server, grouped under its project (or "Other"). Each row has a state dot, the name, a port link, `pid · cpu · MB · uptime` when running, an error count when the log has errors, a CPU bar, and a switch. The switch is the state: green and on means running, grey and off means stopped, amber means starting or stopping. Switching off kills the process tree; an unpinned server is pinned first so it stays on the board and can be switched back on. Switching on runs the saved command. Each group header has its own `start` and `stop` for the whole project. The filter box at the top matches name or port; `/` focuses it. System processes (Postgres, Redis, macOS services) sit in a collapsed **System** list with only a Kill action. Hidden servers sit in a collapsed **Hidden** list with a Show action.
 
-**Log pane.** The selected server: dot, name, `localhost:PORT ↗`, and state. One primary button: **Start** when stopped, **Restart** when running. `···` holds Open in browser, Open in editor, Copy run command, Show errors only, Follow, Clear log, then Pin or Edit, Env, Add to or Remove from a project, Hide, and Remove. Under that, click-to-copy `cwd` and `$ command`. The toolbar has a text filter, an error chip that appears only when the log has errors (click jumps to the next one, shift-click shows errors only), and a `↓ Resume follow` button that appears only when you have scrolled away from the tail. Lines are coloured by content: errors red, warnings amber, ready and listening green. Click a line to copy it. Id-shaped tokens (UUID, 16+ hex, `req-`/`req_`, W3C trace id) are accent buttons that open a Trace view in this pane; JSON lines with `requestId` / `reqId` / `traceId` / `trace_id` / `correlationId` / `x-request-id` also get a small id label. Timestamps show only when the log has them.
+**Log pane.** The selected server: dot, name, `localhost:PORT ↗`, and state. One primary button: **Start** when stopped, **Restart** when running. `···` holds Open in browser, Open in editor, Copy run command, then the rarely used view toggles (Wrap lines, Show timestamps, Expand all JSON), the copy variants, and `Clear log file…`, then Pin or Edit, Env, Add to or Remove from a project, Hide, and Remove. Under that, click-to-copy `cwd` and `$ command`. The toolbar under that is one visible row: search, a Levels dropdown, a conditional error chip, This run, Freeze/Live, Clear, and the line count. Each line carries a level badge in the gutter; error lines are tinted and everything else reads in the foreground colour. Click a line to copy it. Id-shaped tokens (UUID, 16+ hex, `req-`/`req_`, W3C trace id) are accent buttons that open a Trace view in this pane; JSON lines with `requestId` / `reqId` / `traceId` / `trace_id` / `correlationId` / `x-request-id` also get a small id label. Timestamps show only when the log has them.
 
-**Keys.** `↑↓` or `j`/`k` select. `space` toggles the selected server. `r` restarts. `e` jumps to the next error. `c` copies `cd <cwd> && <command>`. `o` opens the port in the browser. `/` focuses the filter. `Esc` closes a menu or sheet. Keys are ignored while an input has focus.
+**Keys.** `↑↓` or `j`/`k` select. `space` toggles the selected server. `r` restarts. `c` copies `cd <cwd> && <command>`. `o` opens the port in the browser. `/` focuses the sidebar filter. In the log: `f` focuses search, `e` and `E` step through errors, `⌘K` clears the view, `g` and `G` go to the top and the tail (`G` also goes live). `Esc` closes a menu or sheet. Keys are ignored while an input has focus; every one of them is an accelerator for a visible control.
 
 **Sheets.** Worktrees, projects, presets, attention, env, and the full server edit open as overlays from the `···` menus. `Esc` or a click on the backdrop closes them. Destructive actions (stop all, stop project, kill system, remove, clear log) ask first. Retire and orphan-remove refuse while a server is running or starting under that path (409, then the status-bar Stop and retire action). The env sheet masks secret-looking live values and has a Reveal text button; a note says `ps eww` cuts values at the first space.
 
@@ -109,11 +109,26 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 ### Log pane — `#16181c`
 
-**A** (min 44, `8px 16px`, wrap, border `#2a2e35`): dot · name 600 14 · `localhost:PORT ↗` · state dim (`unhealthy` in the error token when the probe fails). Primary: **Start** green fill when stopped; **Restart** outlined when running; `starting…` disabled when busy. Then `···` (200px menu): Open in browser (`o`) · Open in editor · Copy run command (`c`) · ─ · Show errors only / Show all · Follow / Stop following · Clear log · ─ · Pin (unpinned) · Edit… (pinned) · Env… · Add to / Remove from project · Hide · Remove (red, pinned).
+**A** (min 44, `8px 16px`, wrap, border `#2a2e35`): dot · name 600 14 · `localhost:PORT ↗` · state dim (`unhealthy` in the error token when the probe fails). Primary: **Start** green fill when stopped; **Restart** outlined when running; `starting…` disabled when busy. Then `···` (200px menu): Open in browser (`o`) · Open in editor · Copy run command (`c`) · ─ · Wrap lines ✓ · Show timestamps ✓ · Expand all JSON ✓ · Copy visible lines · Copy last error · Clear log file… · ─ · Pin (unpinned) · Edit… (pinned) · Env… · Add to / Remove from project · Hide · Remove (red, pinned).
 
 **B** (30px, mono 11 dim, border `#22262c`): click-to-copy `cwd` and `$ command` (glyph `#4a5160`, hover `#d7dae0`); `pid · cpu · MB · up` when running.
 
-**Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`): log filter (26px, flex 1, min 120). Error chip only if the log has errors — click cycles next error, ⇧click toggles errors-only (`1 error ↓` → `error 1/3 ↓` → `errors only · 3`). `↓ Resume follow` (accent outline) only when follow is off; while follow is off it reads `↓ N new` for the lines that have arrived since, and the count resets when follow resumes. Right: `N lines` or `k/N lines`, `title` = log path. While Trace is open the filter, error chip, and follow hide; **Close trace** and `N hits` take their place.
+**Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`). One visible row, in this order, present whenever a service is selected:
+
+```
+[ Search log                         3/41 ▲ ▼ ⊘ ] [ Levels ▾ ] [ 20 errors ↓ ] [ This run ] [ ⏸ Freeze ] [ Clear ]          k/N lines
+```
+
+- Controls are 26px, outlined, mono 12. An active toggle takes the accent border and the accent wash. A conditional chip takes the colour of what it counts. No new palette.
+- The row fits one line at 1280px with the sidebar at its 380px maximum; below that it wraps, search first.
+- **Search** (input, flex 1, min 200, placeholder `Search log  f`). Esc clears and blurs. F-37 adds the match counter, the `▲ ▼` steps, and the `⊘` mode toggle inside its right edge.
+- **Levels ▾** — the one dropdown on this row. The label reads the state: `All levels`, `Errors`, `Errors · Warnings`, or `Custom`. The menu (220px) is one row per level with a check, the badge, and the count, then the `All` and `Errors only` presets. Persists per browser.
+- **N errors ↓** — conditional, error token, shown only when the visible log has an error. Click jumps to the next error; with a cursor set it reads `error 2/20 ↓`. `e` and `E` are the accelerators, and a stop is a head, so a crash is one stop.
+- **This run** — toggle, hides everything before the last `start` marker. Persists per browser.
+- **⏸ Freeze / ▶ Live** — one button, two states. Live: the view appends and follows the tail. Frozen: nothing on screen moves while the buffer keeps filling, and the label reads `▶ Live · +42`. Scrolling away from the tail enters the same state, so there is exactly one control for "take me back to the tail". Clicking it while frozen appends what was held, jumps to the tail, and goes live.
+- **Clear** — clears the view, not the file: entries before now are hidden and the count reads `k/N lines · cleared · show all`. `⌘K` is the accelerator. Truncating the file is `Clear log file…` in the `···` menu, with its confirm.
+- Right: `N lines` or `k/N lines` (mono 11 dim), `title` = log path.
+- Nothing else opens a menu from this row, and no action lives only behind a shortcut. While Trace is open the row keeps only **Close** and `N hits`; the search field and Levels do not filter trace hits, so they hide with the rest until F-44 makes Search own that view.
 
 **Body** (`10px 16px 20px`, mono 12 / 1.6, `#c3c8d1`):
 - Every line is cleaned before it is rendered: CSI, OSC, and single-character escape sequences removed and a `\r` progress bar resolved to its last frame (`cleanLine` in `lib/logs.ts`). No raw control byte — `[?25h` and friends — ever reaches the pane, and a download bar shows one line, not every frame.
@@ -134,7 +149,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 ### Status bar — 28px, `#1c1f24`, border-top `#2a2e35`, mono 11 dim, `0 12px`
 
-`↑↓` select · `␣` on/off · `r` restart · `e` next err · `c` copy run cmd · `o` open · `/` filter. Keys `#d7dae0`. Right: `poll 3s · 127.0.0.1:4242`. Copy toast 1.6s here: `copied · <text>` accent / dim. Retire or remove while a server is running or starting in that checkout shows `Stop and retire · <names>` for 8s with a text-button action that kills those rows and retries.
+`↑↓` select · `␣` on/off · `r` restart · `c` copy run cmd · `o` open · `/` filter · `f` search · `e/E` err · `⌘K` clear · `g/G` top/tail. Keys `#d7dae0`. Right: `poll 3s · 127.0.0.1:4242`. Copy toast 1.6s here: `copied · <text>` accent / dim. Retire or remove while a server is running or starting in that checkout shows `Stop and retire · <names>` for 8s with a text-button action that kills those rows and retries.
 
 ### Overlay sheets
 
@@ -142,10 +157,10 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 ## Behaviour
 
-- Select by row click or `↑↓` / `j`/`k` through **visible** (filtered) rows. Changing selection resets the error cursor, closes Trace, and, if follow is on, scrolls the log to the tail. Persist `sel` in `localStorage`. `?sel=<id>` (tray Logs) selects that row on load and writes the same key.
-- `Space` toggles the selected server. `r` restarts if running. Restarting an unpinned row whose command still has quotes or shell metacharacters (rebuilt from `ps`) returns 409 and opens Edit so you can check quoting; Save pins and restarts. `e` next error. `c` copies `cd <cwd> && <command>`. `o` opens `http://localhost:<port>`.
+- Select by row click or `↑↓` / `j`/`k` through **visible** (filtered) rows. Changing selection resets the error cursor, the folds, the open contexts, and the freeze, closes Trace, and scrolls the log to the tail. Persist `sel` in `localStorage`. `?sel=<id>` (tray Logs) selects that row on load and writes the same key.
+- `Space` toggles the selected server. `r` restarts if running. Restarting an unpinned row whose command still has quotes or shell metacharacters (rebuilt from `ps`) returns 409 and opens Edit so you can check quoting; Save pins and restarts. `e` and `E` step through errors. `c` copies `cd <cwd> && <command>`. `o` opens `http://localhost:<port>`.
 - Busy is optimistic: switch, dot, and primary go amber until `/api/services` agrees (or 15s). On start, append `=== devboard start · <cmd>` and `$ <cmd>` immediately.
-- Follow is on by default. Next-error turns it off. Resume follow turns it on and jumps to the tail. Scrolling away from the tail also turns it off.
+- The view is live by default: it appends and follows the tail. Freeze, next-error, `g`, and scrolling away from the tail all freeze it; the buffer keeps filling and the button counts what it holds. Pressing `▶ Live`, `G`, or scrolling back to the tail with nothing held goes live again.
 - Poll `/api/services` every 3s. The selected log loads `?lines=4000` once, then polls `?from=<byte cursor>` every 1s and appends only what arrived — an idle poll is a few hundred bytes and nothing already on screen is re-rendered. A full repaint happens only when view state changes (selection, filter, errors-only, status). The page keeps at most 10 000 entries: older ones drop off the front and the line numbers keep counting up. `reset` (the log was cleared or rotated) reloads the window.
 - Copy via `navigator.clipboard.writeText`, then the status-bar toast.
 - One open menu. Outside click or item click closes it.
@@ -153,7 +168,7 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 ## State
 
-`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logFilter`, `errOnly`, `follow`, `errCursor`, `jumpLine`, `trace` (`null|{token, groups}`), `menu` (`null|"top"|"log"`), `addOpen`, `toast`, `logs{id: LogEntry[]}`.
+`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logQuery`, `levels` (`Set<LogLevel>`), `runOnly`, `frozen`, `held`, `viewStart{id: key}`, `wrap`, `showTs`, `ctxOpen` / `ctxAll`, `tailOpen`, `errCursor`, `jumpLine`, `trace` (`null|{token, groups}`), `menu` (`null|"top"|"log"|"levels"`), `addOpen`, `toast`, `logs{id: {entries, next, base}}`. `levels`, `runOnly`, `wrap`, and `showTs` persist in `localStorage["devboard.logView"]`.
 
 ## Endpoints
 
@@ -163,6 +178,6 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 - Introduce a framework, a new typeface, or a new palette.
 - Put Worktrees / Attention / Presets back in a top-level tab bar.
-- Show error chips, resume-follow, or empty-state buttons when they do not apply.
+- Show the error chip or empty-state buttons when they do not apply, or hide search, levels, freeze, or clear behind a menu.
 - Fabricate log timestamps.
 - Copy prototype runtimes or mock HTML into `public/`.

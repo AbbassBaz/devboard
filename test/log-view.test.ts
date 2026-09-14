@@ -3,8 +3,8 @@ import { parseLine } from "../lib/logs";
 // The page's pure half. It must import with no DOM, which is the whole point of the file.
 import {
   collapseRepeats, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, foldEntries, formatLogTime,
-  httpSpans, idSpans, levelBadge, levelCounts, lineKind, matchesEntry, mergeSpans, prettyCtx, statusClass,
-  visibleEntries, visibleGroups,
+  httpSpans, idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matchesEntry, mergeSpans,
+  prettyCtx, runBoundaries, scopeStart, statusClass, visibleEntries, visibleGroups,
 } from "../public/log-view.js";
 
 async function fixtureEntries(name: string) {
@@ -55,13 +55,13 @@ describe("lineKind, entryBody, entryTid", () => {
 });
 
 describe("visibleEntries", () => {
-  test("filters on text and on errors only, and keeps file order", async () => {
+  test("filters on text and on the level set, and keeps file order", async () => {
     const entries = await fixtureEntries("nextjs.log");
     expect(visibleEntries(entries, {})).toHaveLength(entries.length);
     expect(visibleEntries(entries, { filter: "  " })).toHaveLength(entries.length);
     expect(visibleEntries(entries, { filter: "get /api" }).map((e) => e.http?.status)).toEqual([500, 404]);
-    expect(visibleEntries(entries, { errOnly: true }).every((e) => e.level === "error")).toBe(true);
-    const both = visibleEntries(entries, { filter: "GET", errOnly: true });
+    expect(visibleEntries(entries, { levels: ["error"] }).every((e) => e.level === "error")).toBe(true);
+    const both = visibleEntries(entries, { filter: "GET", levels: new Set(["error"]) });
     expect(both).toHaveLength(1);
     expect(both[0].http?.status).toBe(500);
     expect(visibleEntries(undefined, {})).toEqual([]);
@@ -71,7 +71,38 @@ describe("visibleEntries", () => {
     const e = parseLine("Error: listen EADDRINUSE", 0);
     expect(matchesEntry(e, { filter: "eaddrinuse" })).toBe(true);
     expect(matchesEntry(e, { filter: "nope" })).toBe(false);
-    expect(matchesEntry(e, { errOnly: true })).toBe(true);
+    expect(matchesEntry(e, { levels: ["error"] })).toBe(true);
+    expect(matchesEntry(e, { levels: ["info"] })).toBe(false);
+  });
+
+  test("levels, this run, and a cleared view each hold on their own and together", async () => {
+    const entries = await fixtureEntries("livekit.log");
+    const all = entries.length;
+    expect(visibleEntries(entries, { levels: LEVELS })).toHaveLength(all);
+    expect(visibleEntries(entries, { levels: ["warn"] }).map((e) => e.level)).toEqual(["warn"]);
+
+    // The livekit fixture opens with a start marker, so This run drops only the marker itself.
+    expect(runBoundaries(entries)).toEqual([0]);
+    expect(runBoundaries(entries, 500)).toEqual([500]);
+    expect(visibleEntries(entries, { runOnly: true })).toHaveLength(all);
+    expect(visibleEntries(entries, { runOnly: true }).map((e) => e.i)).toEqual(entries.map((e) => e.i));
+
+    // A cleared view starts at an absolute key, so a trimmed buffer keeps its boundary.
+    expect(visibleEntries(entries, { viewStart: 10 })).toHaveLength(all - 10);
+    expect(visibleEntries(entries, { viewStart: 510, base: 500 })).toHaveLength(all - 10);
+    expect(visibleEntries(entries, { viewStart: 10_000 })).toHaveLength(0);
+    expect(scopeStart(entries, {})).toBe(0);
+
+    const both = visibleEntries(entries, { viewStart: 12, levels: ["info"], filter: "process" });
+    expect(both.map((e) => e.msg)).toEqual(["process exiting"]);
+  });
+
+  test("the level set the dropdown shows is named by what is in it", () => {
+    expect(levelsLabel(new Set(LEVELS))).toBe("All levels");
+    expect(levelsLabel(["error"])).toBe("Errors");
+    expect(levelsLabel(["error", "warn"])).toBe("Errors · Warnings");
+    expect(levelsLabel(["info", "debug"])).toBe("Custom");
+    expect(levelsLabel([])).toBe("Custom");
   });
 });
 

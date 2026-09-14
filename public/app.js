@@ -1,6 +1,7 @@
 import {
   contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans, idSpans,
-  levelBadge, lineKind, matchesEntry, mergeSpans, prettyCtx, visibleEntries, visibleGroups,
+  levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matchesEntry, mergeSpans, prettyCtx,
+  visibleEntries, visibleGroups,
 } from "./log-view.js";
 
 const $ = (s) => document.querySelector(s);
@@ -19,9 +20,18 @@ const busy = {};
 const logs = {};
 let sel = null;
 let query = "";
-let logFilter = "";
-let errOnly = false;
-let follow = true;
+let logQuery = "";
+/** The Levels dropdown. All five until you uncheck one; persisted per browser. */
+const levels = new Set(LEVELS);
+let runOnly = false;
+/** `false` means live: the view appends and follows the tail. */
+let frozen = false;
+/** Entries that landed in the buffer while frozen. */
+let held = 0;
+/** Per service, the absolute line key Clear moved the view to. */
+const viewStart = {};
+let wrap = true;
+let showTs = true;
 let errCursor = null;
 let menu = null;
 let addOpen = false;
@@ -34,7 +44,6 @@ let clock = nowClock();
 let toastTimer = 0;
 let logDirty = true;
 let logRendered = null;
-let newSinceFollow = 0;
 let trace = null;
 let jumpLine = null;
 /** Absolute line keys (`base + i`) whose JSON context is toggled away from the pane default. */
@@ -119,6 +128,7 @@ function setMenu(name, ev) {
 }
 function paintMenus() {
   $("#topMenu").hidden = menu !== "top";
+  $("#levelsMenu").hidden = menu !== "levels";
   const logMenu = $("#logMenu");
   if (logMenu) logMenu.hidden = menu !== "log";
 }
@@ -184,7 +194,7 @@ function closeTrace() {
 
 async function openTrace(token) {
   if (!token) return;
-  setFollow(false);
+  setFrozen(true);
   trace = { token, groups: [], loading: true };
   markLogDirty();
   paintLog();
@@ -209,7 +219,7 @@ async function openTrace(token) {
 
 async function jumpToHit(id, i) {
   trace = null;
-  setFollow(false);
+  setFrozen(true);
   jumpLine = i;
   if (sel !== id) {
     saveSel(id);
@@ -420,9 +430,12 @@ function logMenuItems(s) {
     { label: "Open in editor", key: "", act: "open-editor" },
     { label: "Copy run command", key: "c", act: "copy-run" },
     { sep: true },
-    { label: errOnly ? "Show all lines" : "Show errors only", key: "", act: "toggle-err-only" },
-    { label: follow ? "Stop following" : "Follow new lines", key: "", act: "toggle-follow" },
-    { label: "Clear log", key: "", act: "clear-log" },
+    { label: "Wrap lines", key: wrap ? "✓" : "", act: "toggle-wrap" },
+    { label: "Show timestamps", key: showTs ? "✓" : "", act: "toggle-ts" },
+    { label: "Expand all JSON", key: ctxAll ? "✓" : "", act: "expand-json" },
+    { label: "Copy visible lines", key: "", act: "copy-visible" },
+    { label: "Copy last error", key: "", act: "copy-last-error" },
+    { label: "Clear log file…", key: "", act: "clear-log" },
     { sep: true },
   ];
   if (s.status === "running" && !s.pinned) items.push({ label: "Pin", key: "", act: "pin" });
@@ -491,15 +504,37 @@ function baseOf(id) {
   return logBuf(id)?.base ?? 0;
 }
 function markLogDirty() { logDirty = true; }
-function setFollow(on) {
-  if (follow === on) return;
-  follow = on;
-  newSinceFollow = 0;
+
+/** Freeze holds the view still while the buffer keeps filling. Live follows the tail. */
+function setFrozen(on) {
+  if (frozen === on) return;
+  frozen = on;
+  if (!on) held = 0;
 }
 
-/** What `visibleEntries`, `matchesEntry`, and the level chips read. */
+const LOG_VIEW_KEY = "devboard.logView";
+function loadLogView() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOG_VIEW_KEY) || "{}");
+    if (Array.isArray(saved.levels) && saved.levels.length) {
+      levels.clear();
+      for (const l of saved.levels) if (LEVELS.includes(l)) levels.add(l);
+    }
+    if (typeof saved.runOnly === "boolean") runOnly = saved.runOnly;
+    if (typeof saved.wrap === "boolean") wrap = saved.wrap;
+    if (typeof saved.showTs === "boolean") showTs = saved.showTs;
+  } catch {}
+}
+function saveLogView() {
+  try {
+    localStorage.setItem(LOG_VIEW_KEY, JSON.stringify({ levels: [...levels], runOnly, wrap, showTs }));
+  } catch {}
+}
+loadLogView();
+
+/** What `visibleEntries`, `visibleGroups`, and `errorIndexes` read. */
 function viewState() {
-  return { filter: logFilter, errOnly };
+  return { filter: logQuery, levels, runOnly, viewStart: viewStart[sel], base: baseOf(sel) };
 }
 function shownEntries(s) {
   return visibleEntries(entriesOf(s?.id), viewState());
@@ -509,47 +544,77 @@ function shownGroups(s) {
   return visibleGroups(entriesOf(s?.id), viewState());
 }
 
-/** Put text in the log filter and apply it. Clicking a logger name is how you filter to one. */
+function errorKeys(s) {
+  return errorIndexes(entriesOf(s?.id), baseOf(s?.id), viewState());
+}
+
+/** Put text in the search field and apply it. Clicking a logger name is how you filter to one. */
 function searchFor(text) {
-  const field = $("#logFilter");
+  const field = $("#logSearch");
   field.value = text;
-  logFilter = text;
+  logQuery = text;
   markLogDirty();
   paintLog();
 }
 
+function levelsMenuHtml(counts) {
+  const rows = LEVELS.map((l) => {
+    const badge = levelBadge(l) || "other";
+    return `<button type="button" data-act="level" data-level="${l}">
+      <span class="lv"><span class="chk">${levels.has(l) ? "✓" : ""}</span><span class="lvl ${lineKind({ level: l })}">${badge}</span></span>
+      <span class="k">${counts[l] ?? 0}</span>
+    </button>`;
+  }).join("");
+  return `${rows}<span class="menu-sep"></span>
+    <button type="button" data-act="levels-all"><span>All</span><span class="k"></span></button>
+    <button type="button" data-act="levels-errors"><span>Errors only</span><span class="k"></span></button>`;
+}
+
 function paintLogTools(s) {
   const raw = entriesOf(s?.id);
-  const errIdx = errorIndexes(raw, baseOf(s?.id));
+  const errIdx = errorKeys(s);
   const shown = shownEntries(s);
-  const chip = $("#errChip");
-  const followBtn = $("#followBtn");
   const tracing = !!trace;
-  $("#logFilter").hidden = tracing;
-  $("#traceClose").hidden = !tracing;
+  const count = $("#logCount");
+  // Trace is its own view: the row keeps only the way out of it.
+  for (const el of ["#searchWrap", "#errChip", "#runBtn", "#freezeBtn", "#clearBtn"]) {
+    $(el).hidden = tracing || !s;
+  }
+  $("#levelsBtn").parentElement.hidden = tracing || !s;
+  $("#closeBtn").hidden = !tracing;
   if (tracing) {
-    chip.hidden = true;
-    followBtn.hidden = true;
     const n = (trace.groups || []).reduce((sum, g) => sum + g.hits.length, 0);
-    $("#logCount").textContent = trace.loading ? "tracing…" : `${n} hit${n === 1 ? "" : "s"}`;
-    $("#logCount").title = trace.token;
+    count.textContent = trace.loading ? "tracing…" : `${n} hit${n === 1 ? "" : "s"}`;
+    count.title = trace.token;
     return;
   }
-  chip.hidden = !s || errIdx.length === 0;
-  chip.classList.toggle("on", errOnly);
+  if (!s) { count.textContent = ""; count.title = ""; return; }
+
+  $("#levelsBtn").textContent = `${levelsLabel(levels)} ▾`;
+  $("#levelsBtn").classList.toggle("on", levelsLabel(levels) !== "All levels");
+  $("#levelsMenu").innerHTML = levelsMenuHtml(levelCounts(raw));
+
+  const chip = $("#errChip");
+  chip.hidden = errIdx.length === 0;
   if (errIdx.length) {
-    const label = errOnly
-      ? `errors only · ${errIdx.length}`
-      : errCursor == null
-        ? `${errIdx.length} ${errIdx.length === 1 ? "error" : "errors"} ↓`
-        : `error ${errIdx.indexOf(errCursor) + 1}/${errIdx.length} ↓`;
+    const label = errCursor == null || !errIdx.includes(errCursor)
+      ? `${errIdx.length} ${errIdx.length === 1 ? "error" : "errors"} ↓`
+      : `error ${errIdx.indexOf(errCursor) + 1}/${errIdx.length} ↓`;
     chip.innerHTML = `<span class="d"></span>${esc(label)}`;
   }
-  followBtn.hidden = follow;
-  followBtn.textContent = newSinceFollow ? `↓ ${newSinceFollow} new` : (followBtn.dataset.label || "↓ Resume follow");
-  const filtered = !!(logFilter.trim() || errOnly);
-  $("#logCount").textContent = s ? (filtered ? `${shown.length}/${raw.length} lines` : `${raw.length} lines`) : "";
-  $("#logCount").title = s ? `~/.devboard/logs/${s.id}.log` : "";
+
+  $("#runBtn").classList.toggle("on", runOnly);
+  const freeze = $("#freezeBtn");
+  freeze.textContent = frozen ? (held ? `▶ Live · +${held}` : "▶ Live") : "⏸ Freeze";
+  freeze.classList.toggle("on", frozen);
+
+  const cleared = viewStart[s.id] != null;
+  const filtered = !!(logQuery.trim() || levelsLabel(levels) !== "All levels" || runOnly || cleared);
+  const lines = filtered ? `${shown.length}/${raw.length} lines` : `${raw.length} lines`;
+  count.innerHTML = cleared
+    ? `${esc(lines)} · cleared · <button type="button" class="link" data-act="show-all">show all</button>`
+    : esc(lines);
+  count.title = `~/.devboard/logs/${s.id}.log`;
 }
 
 function paintTraceBody() {
@@ -586,9 +651,9 @@ function paintTraceBody() {
   body.innerHTML = `<div class="trace"><div class="trace-head"><span class="trace-tok">${esc(trace.token)}</span>${chips}</div>${blocks}</div>`;
 }
 
-/** A log has a time column when any entry in the buffer printed one. */
+/** A log has a time column when the `···` toggle is on and an entry in the buffer printed one. */
 function showTimeFor(id) {
-  return entriesOf(id).some((e) => formatLogTime(e.time));
+  return showTs && entriesOf(id).some((e) => formatLogTime(e.time));
 }
 
 function caretHtml(s) {
@@ -788,7 +853,7 @@ function rebuildBody(s) {
     } else {
       body.innerHTML = caretHtml(s);
       logRendered = { id: s.id, mode: "caret" };
-      if (follow) body.scrollTop = body.scrollHeight;
+      if (!frozen) body.scrollTop = body.scrollHeight;
       return;
     }
     body.innerHTML = `<div class="empty"><span>${esc(text)}</span>${startBtn}</div>`;
@@ -802,7 +867,7 @@ function rebuildBody(s) {
   autoOpenNewestCrash(groups, base);
   body.innerHTML = groups.map((g) => groupHtml(s, g, showTime)).join("") + caretHtml(s);
   logRendered = { id: s.id, mode: "lines", showTime, lastKey: base + groups[groups.length - 1].head.i };
-  if (follow) body.scrollTop = body.scrollHeight;
+  if (!frozen) body.scrollTop = body.scrollHeight;
 }
 
 /**
@@ -828,13 +893,17 @@ function syncGroups(s, body, showTime, added) {
   if (caret) caret.insertAdjacentHTML("beforebegin", html);
   else body.insertAdjacentHTML("beforeend", html);
   logRendered.lastKey = base + groups[groups.length - 1].head.i;
-  if (!follow) newSinceFollow += added.filter((e) => matchesEntry(e, viewState())).length;
   return true;
 }
 
 function appendToLog(s, added, base) {
   const body = $("#logBody");
   const showTime = showTimeFor(s.id);
+  // Frozen: the buffer keeps filling and the count on the button goes up; the DOM does not move.
+  if (frozen) {
+    held += added.filter((e) => matchesEntry(e, viewState())).length;
+    return;
+  }
   if (trace || logDirty || logRendered?.id !== s.id || logRendered.mode !== "lines" || logRendered.showTime !== showTime) {
     markLogDirty();
     paintLogBody(s);
@@ -849,12 +918,12 @@ function appendToLog(s, added, base) {
   const caret = body.querySelector(".caret");
   if (rowState(s) === "on" && !caret) body.insertAdjacentHTML("beforeend", caretHtml(s));
   else if (rowState(s) !== "on" && caret) caret.remove();
-  if (follow) body.scrollTop = body.scrollHeight;
+  if (!frozen) body.scrollTop = body.scrollHeight;
 }
 
 function paintLogBody(s) {
   if (!logDirty) {
-    if (follow) { const b = $("#logBody"); b.scrollTop = b.scrollHeight; }
+    if (!frozen) { const b = $("#logBody"); b.scrollTop = b.scrollHeight; }
     return;
   }
   logDirty = false;
@@ -894,26 +963,55 @@ function select(id) {
   tailOpen.clear();
   autoOpened.clear();
   autoOpenKey = null;
+  frozen = false;
+  held = 0;
   if (trace) { trace = null; }
   markLogDirty();
   paintList();
   paintLog();
-  if (follow) $("#logBody").scrollTop = $("#logBody").scrollHeight;
+  if (!frozen) $("#logBody").scrollTop = $("#logBody").scrollHeight;
   fetchLog(id);
 }
 
-function nextErr() {
+/** `e` forward, `E` back, wrapping at either end. Stops are heads, so a crash is one stop. */
+function stepErr(dir) {
   const s = selected();
   if (!s) return;
-  const idx = errorIndexes(entriesOf(s.id), baseOf(s.id));
+  const idx = errorKeys(s);
   if (!idx.length) return;
-  const cur = errCursor == null ? -1 : errCursor;
-  const next = idx.find((i) => i > cur) ?? idx[0];
+  const cur = errCursor;
+  const next = dir > 0
+    ? idx.find((i) => i > (cur ?? -1)) ?? idx[0]
+    : [...idx].reverse().find((i) => i < (cur ?? Infinity)) ?? idx[idx.length - 1];
   errCursor = next;
-  setFollow(false);
+  setFrozen(true);
   markLogDirty();
   paintLog();
   revealKey(next);
+}
+
+/** Append what the freeze held, land on the tail, and follow again. */
+function goLive() {
+  const s = selected();
+  setFrozen(false);
+  if (s) appendToLog(s, [], baseOf(s.id));
+  $("#logBody").scrollTop = $("#logBody").scrollHeight;
+  paintLog();
+}
+
+/** Clear the view, not the file: hide everything before now. `show all` puts it back. */
+function clearView(showAll) {
+  const s = selected();
+  if (!s) return;
+  if (showAll) delete viewStart[s.id];
+  else viewStart[s.id] = baseOf(s.id) + entriesOf(s.id).length;
+  errCursor = null;
+  markLogDirty();
+  paintLog();
+}
+
+function applyWrap() {
+  $("#logBody").classList.toggle("nowrap", !wrap);
 }
 
 function moveSel(dir) {
@@ -1226,7 +1324,7 @@ function dropLeadingLines(body, base) {
   const removed = height - body.scrollHeight;
   // Absolute, not relative: the browser may have anchored the scroll itself, and
   // subtracting the removed height a second time would slide the view backwards.
-  if (removed > 0 && !follow) body.scrollTop = Math.max(0, top - removed);
+  if (removed > 0 && frozen) body.scrollTop = Math.max(0, top - removed);
 }
 
 /**
@@ -1281,7 +1379,7 @@ async function refresh() {
 const refreshSoon = () => [700, 1600, 3000].forEach((ms) => setTimeout(refresh, ms));
 
 document.addEventListener("click", async (ev) => {
-  if (menu && !ev.target.closest(".menu") && !ev.target.closest("#moreBtn") && !ev.target.closest("#logMenuBtn")) closeMenu();
+  if (menu && !ev.target.closest(".menu") && !ev.target.closest("#moreBtn") && !ev.target.closest("#logMenuBtn") && !ev.target.closest("#levelsBtn")) closeMenu();
   if (ev.target.closest("a[href]")) return;
 
   const idBtn = ev.target.closest(".log-id");
@@ -1348,14 +1446,36 @@ document.addEventListener("click", async (ev) => {
     if (p) window.open(`http://localhost:${p}`, "_blank", "noopener");
     return;
   }
-  if (act === "toggle-err-only") { closeMenu(); errOnly = !errOnly; markLogDirty(); paintLog(); return; }
-  if (act === "toggle-follow") {
+  if (act === "toggle-wrap") { closeMenu(); wrap = !wrap; saveLogView(); applyWrap(); paintLog(); return; }
+  if (act === "toggle-ts") { closeMenu(); showTs = !showTs; saveLogView(); markLogDirty(); paintLog(); return; }
+  if (act === "expand-json") { closeMenu(); toggleCtx(null, true); paintLog(); return; }
+  if (act === "copy-visible" && s) { closeMenu(); copy(shownEntries(s).map((e) => e.text).join("\n")); return; }
+  if (act === "copy-last-error" && s) {
     closeMenu();
-    setFollow(!follow);
-    if (follow) $("#logBody").scrollTop = $("#logBody").scrollHeight;
+    const keys = errorKeys(s);
+    const g = keys.length ? groupOf(keys[keys.length - 1]) : null;
+    copy(g ? [g.head, ...g.tail].map((x) => x.text).join("\n") : "no error in this log");
+    return;
+  }
+  if (act === "level") {
+    const level = btn.dataset.level;
+    if (levels.has(level)) levels.delete(level);
+    else levels.add(level);
+    saveLogView();
+    markLogDirty();
     paintLog();
     return;
   }
+  if (act === "levels-all" || act === "levels-errors") {
+    levels.clear();
+    for (const l of act === "levels-all" ? LEVELS : ["error"]) levels.add(l);
+    saveLogView();
+    closeMenu();
+    markLogDirty();
+    paintLog();
+    return;
+  }
+  if (act === "show-all") { clearView(true); return; }
   if (act === "select-alert" && id) { closeSheet(); select(id); return; }
 
   if (btn.tagName === "BUTTON") btn.disabled = true;
@@ -1552,21 +1672,24 @@ $("#moreBtn").onclick = (ev) => setMenu("top", ev);
 $("#addBtn").onclick = () => { closeMenu(); toggleAdd(); };
 $("#addCancel").onclick = () => { addOpen = false; $("#addForm").hidden = true; };
 $("#q").oninput = (ev) => { query = ev.target.value; paintList(); };
-$("#logFilter").oninput = (ev) => { logFilter = ev.target.value; markLogDirty(); paintLog(); };
-$("#errChip").onclick = (ev) => {
-  if (ev.shiftKey) { errOnly = !errOnly; markLogDirty(); paintLog(); }
-  else nextErr();
-};
-$("#followBtn").onclick = () => {
-  setFollow(true);
-  $("#logBody").scrollTop = $("#logBody").scrollHeight;
-  paintLog();
-};
+$("#logSearch").oninput = (ev) => { logQuery = ev.target.value; markLogDirty(); paintLog(); };
+$("#logSearch").addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape") return;
+  ev.stopPropagation();
+  searchFor("");
+  ev.target.blur();
+});
+$("#errChip").onclick = () => stepErr(1);
+$("#levelsBtn").onclick = (ev) => setMenu("levels", ev);
+$("#runBtn").onclick = () => { runOnly = !runOnly; saveLogView(); markLogDirty(); paintLog(); };
+$("#freezeBtn").onclick = () => { if (frozen) goLive(); else { setFrozen(true); paintLog(); } };
+$("#clearBtn").onclick = () => clearView(false);
 $("#logBody").addEventListener("scroll", () => {
   const b = $("#logBody");
   const atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 8;
-  if (!atBottom && follow) { setFollow(false); paintLogTools(selected()); }
-  else if (atBottom && !follow) { setFollow(true); paintLogTools(selected()); }
+  // Scrolling away from the tail is the same state as pressing Freeze, and has the same way back.
+  if (!atBottom && !frozen) { setFrozen(true); paintLogTools(selected()); }
+  else if (atBottom && frozen && !held) { setFrozen(false); paintLogTools(selected()); }
 });
 $("#overlay").addEventListener("click", (ev) => { if (ev.target === $("#overlay")) closeSheet(); });
 
@@ -1708,6 +1831,7 @@ document.addEventListener("keydown", (ev) => {
     if (addOpen) { addOpen = false; $("#addForm").hidden = true; }
     return;
   }
+  if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "K")) { ev.preventDefault(); clearView(false); return; }
   if (typing) return;
   if (ev.key === "/") { ev.preventDefault(); $("#q").focus(); return; }
   if (overlayOpen()) return;
@@ -1715,7 +1839,10 @@ document.addEventListener("keydown", (ev) => {
   else if (ev.key === "ArrowUp" || ev.key === "k") { ev.preventDefault(); moveSel(-1); }
   else if (ev.key === " ") { ev.preventDefault(); const s = selected(); if (s) toggle(s); }
   else if (ev.key === "r") { const s = selected(); if (s?.status === "running") restart(s); }
-  else if (ev.key === "e") { ev.preventDefault(); nextErr(); }
+  else if (ev.key === "f") { ev.preventDefault(); $("#logSearch").focus(); }
+  else if (ev.key === "e" || ev.key === "E") { ev.preventDefault(); stepErr(ev.key === "E" ? -1 : 1); }
+  else if (ev.key === "g") { ev.preventDefault(); setFrozen(true); $("#logBody").scrollTop = 0; paintLog(); }
+  else if (ev.key === "G") { ev.preventDefault(); goLive(); }
   else if (ev.key === "c" && !ev.metaKey && !ev.ctrlKey) { const s = selected(); if (s) copy(runCmd(s)); }
   else if (ev.key === "o" && !ev.metaKey && !ev.ctrlKey) {
     const s = selected();
@@ -1726,6 +1853,7 @@ document.addEventListener("keydown", (ev) => {
 
 paintClock();
 paintChrome();
+applyWrap();
 refresh();
 setInterval(paintClock, 1000);
 setInterval(refresh, 3000);
