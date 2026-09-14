@@ -284,6 +284,41 @@ export function errorIndexes(entries, base = 0, state = {}) {
   return out;
 }
 
+const DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * `2m ago` for a time devboard itself wrote, within the last day. Nothing is invented:
+ * an unparseable or older stamp gets no relative label at all.
+ */
+export function relativeAge(at, now = Date.now()) {
+  const t = Date.parse(at ?? "");
+  if (Number.isNaN(t)) return "";
+  const ms = now - t;
+  if (ms < 0 || ms > DAY) return "";
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.floor(mins / 60)}h ago`;
+}
+
+/** The label on a divider: `run 3 · 04:37:27 · pnpm dev · 2m ago`, `rotated · 04:40:00`. */
+export function markerLabel(entry, run = 1, now = Date.now()) {
+  const marker = entry?.marker;
+  if (!marker) return "";
+  const parts = [marker.type === "start" ? `run ${run}` : marker.type, formatLogTime(marker.at)];
+  if (marker.type === "start" && marker.command) parts.push(marker.command);
+  const age = relativeAge(marker.at, now);
+  if (age) parts.push(age);
+  return parts.filter(Boolean).join(" · ");
+}
+
+/** The unread divider's label, from the first new line's own time. Never a fabricated one. */
+export function unreadLabel(entry) {
+  const t = formatLogTime(entry?.time);
+  return t ? `new since ${t}` : "new";
+}
+
 /** What the Levels button reads, from the set it has checked. */
 export function levelsLabel(levels) {
   const on = LEVELS.filter((l) => inLevels({ level: l }, levels));

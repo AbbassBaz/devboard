@@ -687,6 +687,20 @@ pre.ctx {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.log-div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  font: 11px var(--mono);
+  color: var(--dim);
+  user-select: none;
+}
+.log-div::before,
+.log-div::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.log-div.new { color: var(--accent); }
+.log-div.new::before,
+.log-div.new::after { background: rgba(138, 180, 248, .35); }
 .log-line.cont { color: var(--dim); }
 .log-line.cont .c { padding-left: 14px; }
 .fold {

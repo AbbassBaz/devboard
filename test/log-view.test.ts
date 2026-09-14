@@ -4,8 +4,8 @@ import { parseLine } from "../lib/logs";
 import {
   collapseRepeats, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, foldEntries, formatLogTime,
   httpSpans, idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matches, matchesEntry,
-  matchIndexes, matchSpans, mergeSpans, parseFilter, prettyCtx, runBoundaries, scopeStart, statusClass,
-  visibleEntries, visibleGroups,
+  markerLabel, matchIndexes, matchSpans, mergeSpans, parseFilter, prettyCtx, relativeAge, runBoundaries,
+  scopeStart, statusClass, unreadLabel, visibleEntries, visibleGroups,
 } from "../public/log-view.js";
 
 async function fixtureEntries(name: string) {
@@ -182,6 +182,41 @@ describe("foldEntries and collapseRepeats", () => {
     const py = await fixtureEntries("python-traceback.log");
     // One stop for the whole traceback, and it is the line that printed it.
     expect(errorIndexes(py, 100)).toEqual([100]);
+  });
+});
+
+describe("runBoundaries, markerLabel, relativeAge", () => {
+  test("finds every start marker in the buffer, in order, as absolute keys", async () => {
+    const one = await fixtureEntries("livekit.log");
+    const three = [...one, ...one, ...one].map((e, i) => ({ ...e, i }));
+    expect(runBoundaries(three)).toEqual([0, one.length, one.length * 2]);
+    expect(runBoundaries(three, 40)).toEqual([40, 40 + one.length, 40 + one.length * 2]);
+    expect(runBoundaries([])).toEqual([]);
+  });
+
+  test("a divider reads its run, its own time, and the command that started it", () => {
+    const start = parseLine("===== 2026-09-12T04:37:27.000Z start in /tmp/web: pnpm dev =====", 0);
+    const at = Date.parse("2026-09-12T04:37:27.000Z");
+    expect(markerLabel(start, 3, at + 2 * 60_000)).toBe(`run 3 · ${formatLogTime(start.marker!.at)} · pnpm dev · 2m ago`);
+    // Older than a day: the time stays, the relative label goes.
+    expect(markerLabel(start, 1, at + 3 * 24 * 3600_000)).toBe(`run 1 · ${formatLogTime(start.marker!.at)} · pnpm dev`);
+    const rotated = parseLine("===== 2026-09-12T04:40:00.000Z rotated, kept last 2048 KB =====", 1);
+    expect(markerLabel(rotated, 1, Date.parse("2026-09-12T04:40:00.000Z"))).toBe("rotated · 04:40:00 · 0s ago");
+    expect(markerLabel(parseLine("plain line", 2))).toBe("");
+  });
+
+  test("relativeAge only labels a time devboard wrote, and only for a day", () => {
+    const now = Date.parse("2026-09-12T12:00:00.000Z");
+    expect(relativeAge("2026-09-12T11:59:30.000Z", now)).toBe("30s ago");
+    expect(relativeAge("2026-09-12T09:30:00.000Z", now)).toBe("2h ago");
+    expect(relativeAge("2026-09-10T12:00:00.000Z", now)).toBe("");
+    expect(relativeAge("later", now)).toBe("");
+    expect(relativeAge(undefined, now)).toBe("");
+  });
+
+  test("the unread divider names the first new line's own time, or nothing", () => {
+    expect(unreadLabel(parseLine("2026-09-12 04:41:34,700 - INFO api - up", 0))).toBe("new since 04:41:34");
+    expect(unreadLabel(parseLine("no time here", 1))).toBe("new");
   });
 });
 

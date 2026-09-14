@@ -1,7 +1,7 @@
 import {
   compileFilter, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans,
-  idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matchesEntry, matchIndexes, matchSpans,
-  mergeSpans, prettyCtx, visibleEntries, visibleGroups,
+  idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, markerLabel, matchesEntry, matchIndexes,
+  matchSpans, mergeSpans, prettyCtx, runBoundaries, unreadLabel, visibleEntries, visibleGroups,
 } from "./log-view.js";
 
 const $ = (s) => document.querySelector(s);
@@ -26,6 +26,9 @@ const queries = {};
 /** The absolute key of the match the steps are on, and whether search hides the rest. */
 let matchCursor = null;
 let hideNonMatching = true;
+/** Where the view was when you left each service, and where to draw `new since` on return. */
+const lastSeen = {};
+let unreadKey = null;
 /** The Levels dropdown. All five until you uncheck one; persisted per browser. */
 const levels = new Set(LEVELS);
 let runOnly = false;
@@ -807,9 +810,44 @@ function tailIsOpen(key) {
   return tailOpen.has(key);
 }
 
+/** Which run each `start` marker opens, counted over the buffer. */
+function runNumbers(id) {
+  const map = new Map();
+  runBoundaries(entriesOf(id), baseOf(id)).forEach((key, n) => map.set(key, n + 1));
+  return map;
+}
+
+function dividerHtml(entry, run, cls = "") {
+  return `<div class="log-div ${cls}"><span>${esc(markerLabel(entry, run))}</span></div>`;
+}
+
+function unreadDividerHtml(entry) {
+  return `<div class="log-div new" id="unread-div"><span>${esc(unreadLabel(entry))}</span></div>`;
+}
+
+/** The body's groups, with the run dividers they carry and the unread divider once. */
+function renderGroups(s, groups, showTime, opts = {}) {
+  const base = baseOf(s.id);
+  const runs = runNumbers(s.id);
+  let drawUnread = opts.unread !== false && unreadKey != null;
+  let html = "";
+  for (const g of groups) {
+    const key = base + g.head.i;
+    if (drawUnread && key >= unreadKey) {
+      html += unreadDividerHtml(g.head);
+      drawUnread = false;
+    }
+    html += groupHtml(s, g, showTime, runs);
+  }
+  return html;
+}
+
 /** One group: the head line, its `▶ +N lines` chevron, and the tail when it is open. */
-function groupHtml(s, g, showTime) {
+function groupHtml(s, g, showTime, runs) {
   const key = baseOf(s.id) + g.head.i;
+  if (g.head.marker) {
+    return `<div class="log-group" data-i="${key}" id="log-${esc(s.id)}-${key}">${dividerHtml(g.head, runs?.get(key) ?? 1)}</div>`;
+  }
   const open = tailIsOpen(key);
   const fold = g.tail.length
     ? `<button type="button" class="fold" data-act="fold" data-key="${key}">${open ? "▼" : "▶"} +${g.tail.length} lines</button>`
@@ -935,7 +973,7 @@ function rebuildBody(s) {
   const base = baseOf(s.id);
   const groups = shownGroups(s);
   autoOpenNewestCrash(groups, base);
-  body.innerHTML = groups.map((g) => groupHtml(s, g, showTime)).join("") + caretHtml(s);
+  body.innerHTML = renderGroups(s, groups, showTime) + caretHtml(s);
   logRendered = { id: s.id, mode: "lines", showTime, lastKey: base + groups[groups.length - 1].head.i };
   if (!frozen) body.scrollTop = body.scrollHeight;
 }
@@ -958,7 +996,7 @@ function syncGroups(s, body, showTime, added) {
     node.remove();
   }
   autoOpenNewestCrash(groups, base);
-  const html = groups.slice(from).map((g) => groupHtml(s, g, showTime)).join("");
+  const html = renderGroups(s, groups.slice(from), showTime, { unread: !document.getElementById("unread-div") });
   const caret = body.querySelector(".caret");
   if (caret) caret.insertAdjacentHTML("beforebegin", html);
   else body.insertAdjacentHTML("beforeend", html);
@@ -1024,6 +1062,9 @@ function render() {
 
 function select(id) {
   if (!id || sel === id) { saveSel(id); paintList(); return; }
+  // Where this log was when you looked away, so coming back can say what is new.
+  if (sel) lastSeen[sel] = baseOf(sel) + entriesOf(sel).length;
+  unreadKey = lastSeen[id] ?? null;
   saveSel(id);
   errCursor = null;
   jumpLine = null;
@@ -1067,6 +1108,8 @@ function stepErr(dir) {
 function goLive() {
   const s = selected();
   setFrozen(false);
+  // Reaching the tail is what makes "new since" stop being true.
+  if (unreadKey != null) { unreadKey = null; if (s) delete lastSeen[s.id]; markLogDirty(); }
   if (s) appendToLog(s, [], baseOf(s.id));
   $("#logBody").scrollTop = $("#logBody").scrollHeight;
   paintLog();
@@ -1420,6 +1463,9 @@ async function fetchLog(id, opts = {}) {
     const incoming = data.entries || [];
     if (full) {
       logs[id] = { entries: incoming.map((e, k) => ({ ...e, i: k })), next: data.next ?? data.size ?? 0, base: 0 };
+      // A full reload renumbers from zero, so anything keyed to the old window is stale.
+      delete lastSeen[id];
+      if (id === sel) unreadKey = null;
       if (id !== sel) { paintChrome(); paintList(); return; }
       markLogDirty();
       paintLog();
