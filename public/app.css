@@ -646,6 +646,12 @@ input, textarea { font: inherit; color: var(--fg); }
 .log-line.err { color: var(--err-fg); background: rgba(229, 83, 75, .1); }
 .log-line.mark { color: var(--dim); }
 .log-line.cur { box-shadow: inset 2px 0 0 var(--err); }
+.log-line.hit { box-shadow: inset 2px 0 0 var(--accent); }
+.log-line mark {
+  background: rgba(138, 180, 248, .22);
+  color: var(--fg);
+  border-radius: 2px;
+}
 .log-line .lg {
   color: var(--dim);
   font: inherit;

@@ -56,11 +56,111 @@ function inScope(entry, state) {
   return !!entry && inLevels(entry, state.levels);
 }
 
-/** The text filter. Plain substring until F-37 gives it a syntax. */
+const TOKEN = /-?"[^"]*"|-?\/(?:[^/\\]|\\.)*\/[a-z]*(?=\s|$)|\S+/g;
+const RE_TOKEN = /^\/((?:[^/\\]|\\.)*)\/([a-z]*)$/;
+/** Real regex flags. Anything else means the slashes were a path: `/_next/static` is a term. */
+const RE_FLAGS = /^[dgimsuvy]*$/;
+
+/**
+ * The search field's syntax: plain words, `-term` to exclude, `"a phrase"`, and `/regex/`.
+ * No `level:` or `logger:` keywords — the Levels dropdown and a click on a logger cover those.
+ * An unparseable regex comes back as `invalid`, which matches nothing and reddens the field.
+ */
+export function parseFilter(text) {
+  const out = { terms: [], not: [], phrases: [], empty: true };
+  const raw = String(text ?? "").trim();
+  if (!raw) return out;
+  out.empty = false;
+  for (const token of raw.match(TOKEN) ?? []) {
+    const negated = token.startsWith("-") && token.length > 1;
+    const body = negated ? token.slice(1) : token;
+    if (body.startsWith('"')) {
+      const phrase = body.slice(1, body.endsWith('"') && body.length > 1 ? -1 : undefined);
+      if (!phrase) continue;
+      (negated ? out.not : out.phrases).push(phrase);
+      continue;
+    }
+    const re = RE_TOKEN.exec(body);
+    if (re && RE_FLAGS.test(re[2])) {
+      try {
+        const compiled = new RegExp(re[1], re[2].includes("i") ? re[2] : `${re[2]}i`);
+        if (negated) out.notRegex = compiled;
+        else out.regex = compiled;
+      } catch {
+        out.invalid = true;
+      }
+      continue;
+    }
+    (negated ? out.not : out.terms).push(body);
+  }
+  return out;
+}
+
+/** Does this entry's text survive a parsed filter? Every term and phrase, no exclusion, regex too. */
+export function matches(entry, filter) {
+  if (!filter || filter.empty) return true;
+  if (filter.invalid) return false;
+  const text = entry?.text ?? "";
+  const lower = text.toLowerCase();
+  for (const t of filter.terms) if (!lower.includes(t.toLowerCase())) return false;
+  for (const p of filter.phrases) if (!lower.includes(p.toLowerCase())) return false;
+  for (const n of filter.not) if (lower.includes(n.toLowerCase())) return false;
+  if (filter.regex && !filter.regex.test(text)) return false;
+  if (filter.notRegex && filter.notRegex.test(text)) return false;
+  return true;
+}
+
+let filterCache = { text: null, filter: null };
+/** `parseFilter` memoised on the field's text: every entry in the buffer asks for the same one. */
+export function compileFilter(text) {
+  const key = String(text ?? "");
+  if (filterCache.text !== key) filterCache = { text: key, filter: parseFilter(key) };
+  return filterCache.filter;
+}
+
+/** The text filter. `filterHides: false` is the `⊘` mode: keep every line, highlight the hits. */
 function matchesSearch(entry, state) {
-  const q = (state.filter ?? "").trim().toLowerCase();
-  if (!q) return true;
-  return (entry?.text ?? "").toLowerCase().includes(q);
+  if (state.filterHides === false) return true;
+  return matches(entry, compileFilter(state.filter));
+}
+
+/** Where a filter hits inside one string, for `<mark>`. Exclusions have nothing to mark. */
+export function matchSpans(text, filter) {
+  if (!filter || filter.empty || filter.invalid || !text) return [];
+  const spans = [];
+  const lower = text.toLowerCase();
+  for (const needle of [...filter.terms, ...filter.phrases]) {
+    const n = needle.toLowerCase();
+    if (!n) continue;
+    let from = 0;
+    while (from < lower.length) {
+      const at = lower.indexOf(n, from);
+      if (at < 0) break;
+      spans.push({ start: at, end: at + n.length });
+      from = at + n.length;
+    }
+  }
+  if (filter.regex) {
+    const re = new RegExp(filter.regex.source, filter.regex.flags.includes("g") ? filter.regex.flags : `${filter.regex.flags}g`);
+    for (const m of text.matchAll(re)) {
+      const at = m.index ?? 0;
+      if (m[0].length) spans.push({ start: at, end: at + m[0].length });
+    }
+  }
+  return mergeSpans(spans.map((s) => ({ ...s, kind: "mark" })));
+}
+
+/** Absolute keys of every line the search hits, in file order, folded tails included. */
+export function matchIndexes(entries, state = {}) {
+  const base = state.base ?? 0;
+  const filter = compileFilter(state.filter);
+  if (filter.empty || filter.invalid) return [];
+  const out = [];
+  for (const g of visibleGroups(entries, state)) {
+    if (matches(g.head, filter)) out.push(base + g.head.i);
+    for (const e of g.tail ?? []) if (matches(e, filter)) out.push(base + e.i);
+  }
+  return out;
 }
 
 /** Does this entry survive the level set and the search text? */

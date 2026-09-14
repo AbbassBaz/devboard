@@ -3,8 +3,9 @@ import { parseLine } from "../lib/logs";
 // The page's pure half. It must import with no DOM, which is the whole point of the file.
 import {
   collapseRepeats, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, foldEntries, formatLogTime,
-  httpSpans, idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matchesEntry, mergeSpans,
-  prettyCtx, runBoundaries, scopeStart, statusClass, visibleEntries, visibleGroups,
+  httpSpans, idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matches, matchesEntry,
+  matchIndexes, matchSpans, mergeSpans, parseFilter, prettyCtx, runBoundaries, scopeStart, statusClass,
+  visibleEntries, visibleGroups,
 } from "../public/log-view.js";
 
 async function fixtureEntries(name: string) {
@@ -181,6 +182,55 @@ describe("foldEntries and collapseRepeats", () => {
     const py = await fixtureEntries("python-traceback.log");
     // One stop for the whole traceback, and it is the line that printed it.
     expect(errorIndexes(py, 100)).toEqual([100]);
+  });
+});
+
+describe("parseFilter, matches, matchIndexes", () => {
+  test("the syntax splits into terms, exclusions, phrases, and a regex", () => {
+    const f = parseFilter('-static "not found" /^GET/');
+    expect(f.not).toEqual(["static"]);
+    expect(f.phrases).toEqual(["not found"]);
+    expect(f.terms).toEqual([]);
+    expect(f.regex.source).toBe("^GET");
+    expect(parseFilter("  ").empty).toBe(true);
+    expect(parseFilter("one two").terms).toEqual(["one", "two"]);
+    // A path is not a regex: `/_next/static` has no valid flags, so it stays a term.
+    expect(parseFilter("/_next/static").terms).toEqual(["/_next/static"]);
+    expect(parseFilter("/_next/static").regex).toBeUndefined();
+  });
+
+  test("negation, phrase, and regex hold together on one line", () => {
+    const hit = parseLine("GET /api/x 500 not found in 3ms", 0);
+    const miss = parseLine("GET /static/app.js 200 not found in 3ms", 1);
+    const f = parseFilter('-static "not found" /^GET/');
+    expect(matches(hit, f)).toBe(true);
+    expect(matches(miss, f)).toBe(false);
+    expect(matches(parseLine("POST /api/x 500 not found", 2), f)).toBe(false);
+    expect(matches(hit, parseFilter(""))).toBe(true);
+  });
+
+  test("an unparseable regex matches nothing and says so", () => {
+    const f = parseFilter("/(/");
+    expect(f.invalid).toBe(true);
+    expect(matches(parseLine("anything at all", 0), f)).toBe(false);
+    expect(matchSpans("anything at all", f)).toEqual([]);
+  });
+
+  test("matchIndexes returns absolute keys in order, folded frames included", async () => {
+    const entries = await fixtureEntries("node-crash.log");
+    // Line 1 is the head; lines 2 and 5 are frames folded under it.
+    const keys = matchIndexes(entries, { filter: "EADDRINUSE" });
+    expect(keys).toEqual([1, 2, 5]);
+    expect(matchIndexes(entries, { filter: "EADDRINUSE", base: 900 })).toEqual([901, 902, 905]);
+    // `⊘` mode keeps every line on screen, and the hits are the same lines.
+    expect(matchIndexes(entries, { filter: "EADDRINUSE", filterHides: false })).toEqual([1, 2, 5]);
+    expect(matchIndexes(entries, { filter: "" })).toEqual([]);
+  });
+
+  test("matchSpans marks every hit once, in text order", () => {
+    const spans = matchSpans("GET /api/x 500 GET again", parseFilter("get /api/x"));
+    expect(spans.map((s) => [s.start, s.end])).toEqual([[0, 3], [4, 10], [15, 18]]);
+    expect(matchSpans("GET /a 200", parseFilter("/\\d{3}/")).map((s) => [s.start, s.end])).toEqual([[7, 10]]);
   });
 });
 

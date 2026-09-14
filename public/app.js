@@ -1,7 +1,7 @@
 import {
-  contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans, idSpans,
-  levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matchesEntry, mergeSpans, prettyCtx,
-  visibleEntries, visibleGroups,
+  compileFilter, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans,
+  idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matchesEntry, matchIndexes, matchSpans,
+  mergeSpans, prettyCtx, visibleEntries, visibleGroups,
 } from "./log-view.js";
 
 const $ = (s) => document.querySelector(s);
@@ -21,6 +21,11 @@ const logs = {};
 let sel = null;
 let query = "";
 let logQuery = "";
+/** Search text is per service and lives in memory only. */
+const queries = {};
+/** The absolute key of the match the steps are on, and whether search hides the rest. */
+let matchCursor = null;
+let hideNonMatching = true;
 /** The Levels dropdown. All five until you uncheck one; persisted per browser. */
 const levels = new Set(LEVELS);
 let runOnly = false;
@@ -160,20 +165,38 @@ function spanHtml(span, inner) {
   return inner;
 }
 
+/** Search hits inside one run of text. Marks nest, so a match on a method or an id still shows. */
+function markUp(chunk, marks, offset) {
+  if (!chunk) return "";
+  if (!marks.length) return esc(chunk);
+  let html = "";
+  let cur = 0;
+  for (const m of marks) {
+    const start = Math.max(m.start - offset, 0);
+    const end = Math.min(m.end - offset, chunk.length);
+    if (end <= start || start < cur) continue;
+    html += esc(chunk.slice(cur, start));
+    html += `<mark>${esc(chunk.slice(start, end))}</mark>`;
+    cur = end;
+  }
+  return html + esc(chunk.slice(cur));
+}
+
 /**
- * One line's text with the pieces the page can act on marked up: id tokens (F-29) and the
- * method, path, status, and duration of a request line. Spans never overlap; ids win.
+ * One line's text with the pieces the page can act on marked up: id tokens (F-29), the
+ * method, path, status, and duration of a request line, and the search hits. Outer spans
+ * never overlap and ids win; marks nest inside whatever they land on.
  */
-function richText(text, entry) {
+function richText(text, entry, marks = []) {
   const spans = mergeSpans([...idSpans(text, entry?.ids), ...httpSpans(text, entry?.http)]);
   let html = "";
   let cur = 0;
   for (const s of spans) {
-    html += esc(text.slice(cur, s.start));
-    html += spanHtml(s, esc(text.slice(s.start, s.end)));
+    html += markUp(text.slice(cur, s.start), marks, cur);
+    html += spanHtml(s, markUp(text.slice(s.start, s.end), marks, s.start));
     cur = s.end;
   }
-  return html + esc(text.slice(cur));
+  return html + markUp(text.slice(cur), marks, cur);
 }
 
 function defaultTraceIds() {
@@ -532,9 +555,9 @@ function saveLogView() {
 }
 loadLogView();
 
-/** What `visibleEntries`, `visibleGroups`, and `errorIndexes` read. */
+/** What `visibleEntries`, `visibleGroups`, `matchIndexes`, and `errorIndexes` read. */
 function viewState() {
-  return { filter: logQuery, levels, runOnly, viewStart: viewStart[sel], base: baseOf(sel) };
+  return { filter: logQuery, filterHides: hideNonMatching, levels, runOnly, viewStart: viewStart[sel], base: baseOf(sel) };
 }
 function shownEntries(s) {
   return visibleEntries(entriesOf(s?.id), viewState());
@@ -548,13 +571,58 @@ function errorKeys(s) {
   return errorIndexes(entriesOf(s?.id), baseOf(s?.id), viewState());
 }
 
+function matchKeys(s) {
+  return matchIndexes(entriesOf(s?.id), viewState());
+}
+
 /** Put text in the search field and apply it. Clicking a logger name is how you filter to one. */
 function searchFor(text) {
   const field = $("#logSearch");
   field.value = text;
   logQuery = text;
+  if (sel) queries[sel] = text;
+  matchCursor = null;
   markLogDirty();
   paintLog();
+}
+
+/** The counter, the steps, and the `⊘` mode toggle, inside the search field's right edge. */
+function paintSearchTools(s) {
+  const wrap = $("#searchTools");
+  const input = $("#logSearch");
+  const filter = compileFilter(logQuery);
+  input.classList.toggle("bad", !!filter.invalid);
+  if (!logQuery.trim()) {
+    wrap.hidden = true;
+    wrap.innerHTML = "";
+    input.style.paddingRight = "";
+    matchCursor = null;
+    return;
+  }
+  const idx = matchKeys(s);
+  if (matchCursor == null || !idx.includes(matchCursor)) matchCursor = idx[0] ?? null;
+  const at = matchCursor == null ? -1 : idx.indexOf(matchCursor);
+  const label = filter.invalid ? "bad regex" : `${at + 1}/${idx.length}`;
+  wrap.hidden = false;
+  wrap.innerHTML = `<span class="n">${esc(label)}</span>
+    <button type="button" data-act="match-prev" title="Previous match (⇧Enter · N)">▲</button>
+    <button type="button" data-act="match-next" title="Next match (Enter · n)">▼</button>
+    <button type="button" data-act="match-mode" class="${hideNonMatching ? "" : "on"}" title="${hideNonMatching ? "Showing only matching lines" : "Showing every line, matches highlighted"}">⊘</button>`;
+  input.style.paddingRight = `${wrap.offsetWidth + 8}px`;
+}
+
+/** Enter, ⇧Enter, `n`, `N`, and the two step buttons all land here. */
+function stepMatch(dir) {
+  const s = selected();
+  if (!s) return;
+  const idx = matchKeys(s);
+  if (!idx.length) return;
+  const at = matchCursor == null ? -1 : idx.indexOf(matchCursor);
+  matchCursor = at < 0 ? idx[dir > 0 ? 0 : idx.length - 1] : idx[(at + dir + idx.length) % idx.length];
+  setFrozen(true);
+  markLogDirty();
+  paintLog();
+  revealKey(matchCursor);
 }
 
 function levelsMenuHtml(counts) {
@@ -590,6 +658,7 @@ function paintLogTools(s) {
   }
   if (!s) { count.textContent = ""; count.title = ""; return; }
 
+  paintSearchTools(s);
   $("#levelsBtn").textContent = `${levelsLabel(levels)} ▾`;
   $("#levelsBtn").classList.toggle("on", levelsLabel(levels) !== "All levels");
   $("#levelsMenu").innerHTML = levelsMenuHtml(levelCounts(raw));
@@ -711,16 +780,17 @@ function contentHtml(e, key) {
   const chevron = ctx
     ? `<button type="button" class="ctx-btn${ctxIsOpen(key) ? " on" : ""}" data-act="ctx" data-key="${key}" title="JSON context · ⌥click toggles every line">{…}</button>`
     : "";
-  return `${lg}${richText(text, e)}${chevron}`;
+  return `${lg}${richText(text, e, matchSpans(text, compileFilter(logQuery)))}${chevron}`;
 }
 
 function logLineHtml(s, e, showTime, opts = {}) {
   const t = formatLogTime(e.time);
   const tid = entryTid(e);
   const key = baseOf(s.id) + e.i;
+  const hit = matchCursor === key ? " hit" : "";
   const cls = opts.cont
-    ? "log-line cont"
-    : `log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}`;
+    ? `log-line cont${hit}`
+    : `log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}${hit}`;
   return `<div class="${cls}" data-i="${key}" title="Click to copy">
       <span class="ln">${key + 1}</span>
       ${opts.repeat > 1 ? `<span class="rep" title="the same line ${opts.repeat} times">×${opts.repeat}</span>` : ""}
@@ -965,6 +1035,9 @@ function select(id) {
   autoOpenKey = null;
   frozen = false;
   held = 0;
+  matchCursor = null;
+  logQuery = queries[id] ?? "";
+  $("#logSearch").value = logQuery;
   if (trace) { trace = null; }
   markLogDirty();
   paintList();
@@ -1476,6 +1549,9 @@ document.addEventListener("click", async (ev) => {
     return;
   }
   if (act === "show-all") { clearView(true); return; }
+  if (act === "match-next") { stepMatch(1); return; }
+  if (act === "match-prev") { stepMatch(-1); return; }
+  if (act === "match-mode") { hideNonMatching = !hideNonMatching; markLogDirty(); paintLog(); return; }
   if (act === "select-alert" && id) { closeSheet(); select(id); return; }
 
   if (btn.tagName === "BUTTON") btn.disabled = true;
@@ -1672,8 +1748,15 @@ $("#moreBtn").onclick = (ev) => setMenu("top", ev);
 $("#addBtn").onclick = () => { closeMenu(); toggleAdd(); };
 $("#addCancel").onclick = () => { addOpen = false; $("#addForm").hidden = true; };
 $("#q").oninput = (ev) => { query = ev.target.value; paintList(); };
-$("#logSearch").oninput = (ev) => { logQuery = ev.target.value; markLogDirty(); paintLog(); };
+$("#logSearch").oninput = (ev) => {
+  logQuery = ev.target.value;
+  if (sel) queries[sel] = logQuery;
+  matchCursor = null;
+  markLogDirty();
+  paintLog();
+};
 $("#logSearch").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); stepMatch(ev.shiftKey ? -1 : 1); return; }
   if (ev.key !== "Escape") return;
   ev.stopPropagation();
   searchFor("");
@@ -1841,6 +1924,7 @@ document.addEventListener("keydown", (ev) => {
   else if (ev.key === "r") { const s = selected(); if (s?.status === "running") restart(s); }
   else if (ev.key === "f") { ev.preventDefault(); $("#logSearch").focus(); }
   else if (ev.key === "e" || ev.key === "E") { ev.preventDefault(); stepErr(ev.key === "E" ? -1 : 1); }
+  else if (ev.key === "n" || ev.key === "N") { ev.preventDefault(); stepMatch(ev.key === "N" ? -1 : 1); }
   else if (ev.key === "g") { ev.preventDefault(); setFrozen(true); $("#logBody").scrollTop = 0; paintLog(); }
   else if (ev.key === "G") { ev.preventDefault(); goLive(); }
   else if (ev.key === "c" && !ev.metaKey && !ev.ctrlKey) { const s = selected(); if (s) copy(runCmd(s)); }
