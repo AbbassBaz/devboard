@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync, realpathSync } from "node:fs";
 import type { Pinned, Service } from "../lib/types";
@@ -14,6 +14,7 @@ import {
   pruneStaleWorktrees,
   removeOrphanedWorktree,
   resetDiskCache,
+  resolveOpenPath,
   retireWorktree,
   scanStaleWorktrees,
   scanWorktrees,
@@ -280,5 +281,24 @@ describe("planWorktreeLaunch", () => {
   test("launching the main checkout only starts pins already there", () => {
     const plan = planWorktreeLaunch("/repo", "/repo", [api], [3003]);
     expect(plan).toEqual({ startIds: ["api-3003"], create: [] });
+  });
+});
+
+describe("resolveOpenPath", () => {
+  test("a relative path from a log line resolves under the service's cwd", () => {
+    const dir = mkdtempSync(join(tmpdir(), "devboard-open-"));
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "src", "page.tsx"), "export default null;\n");
+    expect(resolveOpenPath("src/page.tsx", dir)).toBe(join(dir, "src", "page.tsx"));
+    expect(resolveOpenPath("./src/page.tsx", dir)).toBe(join(dir, "src", "page.tsx"));
+    expect(existsSync(resolveOpenPath("src/page.tsx", dir))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("an absolute path ignores the cwd, and home expands either way", () => {
+    expect(resolveOpenPath("/tmp/x.ts", "/somewhere/else")).toBe("/tmp/x.ts");
+    expect(resolveOpenPath("~/x.ts")).toBe(join(homedir(), "x.ts"));
+    expect(resolveOpenPath("x.ts", "~/proj")).toBe(join(homedir(), "proj", "x.ts"));
+    expect(() => resolveOpenPath("  ")).toThrow("path required");
   });
 });

@@ -1,4 +1,9 @@
-import { entryBody, entryTid, errorIndexes, formatLogTime, lineKind, matchesEntry, visibleEntries } from "./log-view.js";
+import {
+  compileFilter, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans,
+  findLinks, idSpans, isHidden, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, markerLabel,
+  matchesEntry, matchIndexes, matchSpans, mergeSpans, prettyCtx, runBoundaries, unreadLabel, visibleEntries,
+  visibleGroups,
+} from "./log-view.js";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -16,9 +21,29 @@ const busy = {};
 const logs = {};
 let sel = null;
 let query = "";
-let logFilter = "";
-let errOnly = false;
-let follow = true;
+let logQuery = "";
+/** Search text is per service and lives in memory only. */
+const queries = {};
+/** The absolute key of the match the steps are on, and whether search hides the rest. */
+let matchCursor = null;
+let hideNonMatching = true;
+/** Where the view was when you left each service, and where to draw `new since` on return. */
+const lastSeen = {};
+let unreadKey = null;
+/** Hide rules per service, saved per browser, and whether the chip is applying them. */
+const hideRules = {};
+let hideOn = true;
+/** The Levels dropdown. All five until you uncheck one; persisted per browser. */
+const levels = new Set(LEVELS);
+let runOnly = false;
+/** `false` means live: the view appends and follows the tail. */
+let frozen = false;
+/** Entries that landed in the buffer while frozen. */
+let held = 0;
+/** Per service, the absolute line key Clear moved the view to. */
+const viewStart = {};
+let wrap = true;
+let showTs = true;
 let errCursor = null;
 let menu = null;
 let addOpen = false;
@@ -31,9 +56,17 @@ let clock = nowClock();
 let toastTimer = 0;
 let logDirty = true;
 let logRendered = null;
-let newSinceFollow = 0;
 let trace = null;
 let jumpLine = null;
+/** Absolute line keys (`base + i`) whose JSON context is toggled away from the pane default. */
+const ctxOpen = new Set();
+/** ⌥click on any chevron flips the default for every line, so one click opens the pane. */
+let ctxAll = false;
+/** Absolute line keys of the groups whose folded tail is open. */
+const tailOpen = new Set();
+/** Groups the pane opened by itself (the newest crash), so closing one keeps it closed. */
+const autoOpened = new Set();
+let autoOpenKey = null;
 
 try { sel = localStorage.getItem("devboard.sel"); } catch {}
 try {
@@ -107,6 +140,7 @@ function setMenu(name, ev) {
 }
 function paintMenus() {
   $("#topMenu").hidden = menu !== "top";
+  $("#levelsMenu").hidden = menu !== "levels";
   const logMenu = $("#logMenu");
   if (logMenu) logMenu.hidden = menu !== "log";
 }
@@ -132,37 +166,49 @@ function openSheet(id) {
   $(`#${id}`).hidden = false;
 }
 
-function linkIds(text, all) {
-  // A composite token (a traceparent holds the trace id) is not worth tracing on its own: link the part.
-  const own = all ?? [];
-  const ids = own.filter((id) => !own.some((other) => other !== id && id.includes(other))).sort((a, b) => b.length - a.length);
-  if (!ids.length) return esc(text);
-  const spans = [];
-  for (const id of ids) {
-    let from = 0;
-    while (from < text.length) {
-      const i = text.indexOf(id, from);
-      if (i < 0) break;
-      spans.push({ start: i, end: i + id.length, id });
-      from = i + id.length;
-    }
+function spanHtml(span, inner) {
+  if (span.kind === "id") return `<button type="button" class="log-id" data-token="${esc(span.value)}">${inner}</button>`;
+  if (span.kind === "http") return `<span class="${esc(span.cls)}">${inner}</span>`;
+  if (span.kind === "link") return `<a class="log-url" href="${esc(span.value)}" target="_blank" rel="noreferrer">${inner}</a>`;
+  if (span.kind === "path") {
+    const at = [span.line ? `data-line="${span.line}"` : "", span.col ? `data-col="${span.col}"` : ""].join(" ");
+    return `<button type="button" class="log-path" data-act="open-path" data-path="${esc(span.value)}" ${at}>${inner}</button>`;
   }
-  spans.sort((a, b) => a.start - b.start || (b.end - a.end));
-  const kept = [];
-  let last = 0;
-  for (const s of spans) {
-    if (s.start < last) continue;
-    kept.push(s);
-    last = s.end;
-  }
+  return inner;
+}
+
+/** Search hits inside one run of text. Marks nest, so a match on a method or an id still shows. */
+function markUp(chunk, marks, offset) {
+  if (!chunk) return "";
+  if (!marks.length) return esc(chunk);
   let html = "";
   let cur = 0;
-  for (const s of kept) {
-    html += esc(text.slice(cur, s.start));
-    html += `<button type="button" class="log-id" data-token="${esc(s.id)}">${esc(s.id)}</button>`;
+  for (const m of marks) {
+    const start = Math.max(m.start - offset, 0);
+    const end = Math.min(m.end - offset, chunk.length);
+    if (end <= start || start < cur) continue;
+    html += esc(chunk.slice(cur, start));
+    html += `<mark>${esc(chunk.slice(start, end))}</mark>`;
+    cur = end;
+  }
+  return html + esc(chunk.slice(cur));
+}
+
+/**
+ * One line's text with the pieces the page can act on marked up: id tokens (F-29), the
+ * method, path, status, and duration of a request line, and the search hits. Outer spans
+ * never overlap and ids win; marks nest inside whatever they land on.
+ */
+function richText(text, entry, marks = []) {
+  const spans = mergeSpans([...idSpans(text, entry?.ids), ...findLinks(text), ...httpSpans(text, entry?.http)]);
+  let html = "";
+  let cur = 0;
+  for (const s of spans) {
+    html += markUp(text.slice(cur, s.start), marks, cur);
+    html += spanHtml(s, markUp(text.slice(s.start, s.end), marks, s.start));
     cur = s.end;
   }
-  return html + esc(text.slice(cur));
+  return html + markUp(text.slice(cur), marks, cur);
 }
 
 function defaultTraceIds() {
@@ -183,7 +229,7 @@ function closeTrace() {
 
 async function openTrace(token) {
   if (!token) return;
-  setFollow(false);
+  setFrozen(true);
   trace = { token, groups: [], loading: true };
   markLogDirty();
   paintLog();
@@ -208,7 +254,7 @@ async function openTrace(token) {
 
 async function jumpToHit(id, i) {
   trace = null;
-  setFollow(false);
+  setFrozen(true);
   jumpLine = i;
   if (sel !== id) {
     saveSel(id);
@@ -221,7 +267,7 @@ async function jumpToHit(id, i) {
   await fetchLog(id, { full: true, lines: 5000 });
   markLogDirty();
   paintLog();
-  document.getElementById(`log-${id}-${i}`)?.scrollIntoView({ block: "center" });
+  revealKey(i);
 }
 
 function errTotal() {
@@ -419,11 +465,14 @@ function logMenuItems(s) {
     { label: "Open in editor", key: "", act: "open-editor" },
     { label: "Copy run command", key: "c", act: "copy-run" },
     { sep: true },
-    { label: errOnly ? "Show all lines" : "Show errors only", key: "", act: "toggle-err-only" },
-    { label: follow ? "Stop following" : "Follow new lines", key: "", act: "toggle-follow" },
-    { label: "Clear log", key: "", act: "clear-log" },
-    { sep: true },
+    { label: "Wrap lines", key: wrap ? "✓" : "", act: "toggle-wrap" },
+    { label: "Show timestamps", key: showTs ? "✓" : "", act: "toggle-ts" },
+    { label: "Expand all JSON", key: ctxAll ? "✓" : "", act: "expand-json" },
+    { label: "Copy visible lines", key: "", act: "copy-visible" },
+    { label: "Copy last error", key: "", act: "copy-last-error" },
   ];
+  if ((hideRules[s.id] ?? []).length) items.push({ label: "Forget hide rules", key: "", act: "forget-hide" });
+  items.push({ label: "Clear log file…", key: "", act: "clear-log" }, { sep: true });
   if (s.status === "running" && !s.pinned) items.push({ label: "Pin", key: "", act: "pin" });
   if (s.pinned) items.push({ label: "Edit…", key: "", act: "edit" });
   items.push({ label: "Env…", key: "", act: "env" });
@@ -490,52 +539,196 @@ function baseOf(id) {
   return logBuf(id)?.base ?? 0;
 }
 function markLogDirty() { logDirty = true; }
-function setFollow(on) {
-  if (follow === on) return;
-  follow = on;
-  newSinceFollow = 0;
+
+/** Freeze holds the view still while the buffer keeps filling. Live follows the tail. */
+function setFrozen(on) {
+  if (frozen === on) return;
+  frozen = on;
+  if (!on) held = 0;
 }
 
-/** What `visibleEntries`, `matchesEntry`, and the level chips read. */
+const LOG_VIEW_KEY = "devboard.logView";
+function loadLogView() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOG_VIEW_KEY) || "{}");
+    if (Array.isArray(saved.levels) && saved.levels.length) {
+      levels.clear();
+      for (const l of saved.levels) if (LEVELS.includes(l)) levels.add(l);
+    }
+    if (typeof saved.runOnly === "boolean") runOnly = saved.runOnly;
+    if (typeof saved.wrap === "boolean") wrap = saved.wrap;
+    if (typeof saved.showTs === "boolean") showTs = saved.showTs;
+  } catch {}
+}
+function saveLogView() {
+  try {
+    localStorage.setItem(LOG_VIEW_KEY, JSON.stringify({ levels: [...levels], runOnly, wrap, showTs }));
+  } catch {}
+}
+loadLogView();
+
+const LOG_HIDE_KEY = "devboard.logHide";
+function loadHideRules() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOG_HIDE_KEY) || "{}");
+    for (const [id, rules] of Object.entries(saved)) {
+      if (Array.isArray(rules) && rules.length) hideRules[id] = rules.filter((r) => typeof r === "string" && r.trim());
+    }
+  } catch {}
+}
+function saveHideRules() {
+  try { localStorage.setItem(LOG_HIDE_KEY, JSON.stringify(hideRules)); } catch {}
+}
+loadHideRules();
+
+/** What `visibleEntries`, `visibleGroups`, `matchIndexes`, and `errorIndexes` read. */
 function viewState() {
-  return { filter: logFilter, errOnly };
+  return {
+    filter: logQuery,
+    filterHides: hideNonMatching,
+    levels,
+    runOnly,
+    hide: hideRules[sel],
+    hideOn,
+    viewStart: viewStart[sel],
+    base: baseOf(sel),
+  };
 }
 function shownEntries(s) {
   return visibleEntries(entriesOf(s?.id), viewState());
 }
 
-function paintLogTools(s) {
-  const raw = entriesOf(s?.id);
-  const errIdx = errorIndexes(raw, baseOf(s?.id));
-  const shown = shownEntries(s);
-  const chip = $("#errChip");
-  const followBtn = $("#followBtn");
-  const tracing = !!trace;
-  $("#logFilter").hidden = tracing;
-  $("#traceClose").hidden = !tracing;
-  if (tracing) {
-    chip.hidden = true;
-    followBtn.hidden = true;
-    const n = (trace.groups || []).reduce((sum, g) => sum + g.hits.length, 0);
-    $("#logCount").textContent = trace.loading ? "tracing…" : `${n} hit${n === 1 ? "" : "s"}`;
-    $("#logCount").title = trace.token;
+function shownGroups(s) {
+  return visibleGroups(entriesOf(s?.id), viewState());
+}
+
+function errorKeys(s) {
+  return errorIndexes(entriesOf(s?.id), baseOf(s?.id), viewState());
+}
+
+function matchKeys(s) {
+  return matchIndexes(entriesOf(s?.id), viewState());
+}
+
+/** Put text in the search field and apply it. Clicking a logger name is how you filter to one. */
+function searchFor(text) {
+  const field = $("#logSearch");
+  field.value = text;
+  logQuery = text;
+  if (sel) queries[sel] = text;
+  matchCursor = null;
+  markLogDirty();
+  paintLog();
+}
+
+/** The counter, the steps, and the `⊘` mode toggle, inside the search field's right edge. */
+function paintSearchTools(s) {
+  const wrap = $("#searchTools");
+  const input = $("#logSearch");
+  const filter = compileFilter(logQuery);
+  input.classList.toggle("bad", !!filter.invalid);
+  if (!logQuery.trim()) {
+    wrap.hidden = true;
+    wrap.innerHTML = "";
+    input.style.paddingRight = "";
+    matchCursor = null;
     return;
   }
-  chip.hidden = !s || errIdx.length === 0;
-  chip.classList.toggle("on", errOnly);
+  const idx = matchKeys(s);
+  if (matchCursor == null || !idx.includes(matchCursor)) matchCursor = idx[0] ?? null;
+  const at = matchCursor == null ? -1 : idx.indexOf(matchCursor);
+  const label = filter.invalid ? "bad regex" : `${at + 1}/${idx.length}`;
+  wrap.hidden = false;
+  wrap.innerHTML = `<span class="n">${esc(label)}</span>
+    <button type="button" data-act="match-prev" title="Previous match (⇧Enter · N)">▲</button>
+    <button type="button" data-act="match-next" title="Next match (Enter · n)">▼</button>
+    <button type="button" data-act="match-mode" class="${hideNonMatching ? "" : "on"}" title="${hideNonMatching ? "Showing only matching lines" : "Showing every line, matches highlighted"}">⊘</button>
+    <button type="button" class="hide-these" data-act="hide-these" title="Stop showing lines like these in this log">Hide these</button>`;
+  input.style.paddingRight = `${wrap.offsetWidth + 8}px`;
+}
+
+/** Enter, ⇧Enter, `n`, `N`, and the two step buttons all land here. */
+function stepMatch(dir) {
+  const s = selected();
+  if (!s) return;
+  const idx = matchKeys(s);
+  if (!idx.length) return;
+  const at = matchCursor == null ? -1 : idx.indexOf(matchCursor);
+  matchCursor = at < 0 ? idx[dir > 0 ? 0 : idx.length - 1] : idx[(at + dir + idx.length) % idx.length];
+  setFrozen(true);
+  markLogDirty();
+  paintLog();
+  revealKey(matchCursor);
+}
+
+function levelsMenuHtml(counts) {
+  const rows = LEVELS.map((l) => {
+    const badge = levelBadge(l) || "other";
+    return `<button type="button" data-act="level" data-level="${l}">
+      <span class="lv"><span class="chk">${levels.has(l) ? "✓" : ""}</span><span class="lvl ${lineKind({ level: l })}">${badge}</span></span>
+      <span class="k">${counts[l] ?? 0}</span>
+    </button>`;
+  }).join("");
+  return `${rows}<span class="menu-sep"></span>
+    <button type="button" data-act="levels-all"><span>All</span><span class="k"></span></button>
+    <button type="button" data-act="levels-errors"><span>Errors only</span><span class="k"></span></button>`;
+}
+
+function paintLogTools(s) {
+  const raw = entriesOf(s?.id);
+  const errIdx = errorKeys(s);
+  const shown = shownEntries(s);
+  const tracing = !!trace;
+  const count = $("#logCount");
+  // Trace is its own view: the row keeps only the way out of it.
+  for (const el of ["#searchWrap", "#errChip", "#runBtn", "#freezeBtn", "#clearBtn", "#hideChip"]) {
+    $(el).hidden = tracing || !s;
+  }
+  $("#levelsBtn").parentElement.hidden = tracing || !s;
+  $("#closeBtn").hidden = !tracing;
+  if (tracing) {
+    const n = (trace.groups || []).reduce((sum, g) => sum + g.hits.length, 0);
+    count.textContent = trace.loading ? "tracing…" : `${n} hit${n === 1 ? "" : "s"}`;
+    count.title = trace.token;
+    return;
+  }
+  if (!s) { count.textContent = ""; count.title = ""; return; }
+
+  paintSearchTools(s);
+  $("#levelsBtn").textContent = `${levelsLabel(levels)} ▾`;
+  $("#levelsBtn").classList.toggle("on", levelsLabel(levels) !== "All levels");
+  $("#levelsMenu").innerHTML = levelsMenuHtml(levelCounts(raw));
+
+  const chip = $("#errChip");
+  chip.hidden = errIdx.length === 0;
   if (errIdx.length) {
-    const label = errOnly
-      ? `errors only · ${errIdx.length}`
-      : errCursor == null
-        ? `${errIdx.length} ${errIdx.length === 1 ? "error" : "errors"} ↓`
-        : `error ${errIdx.indexOf(errCursor) + 1}/${errIdx.length} ↓`;
+    const label = errCursor == null || !errIdx.includes(errCursor)
+      ? `${errIdx.length} ${errIdx.length === 1 ? "error" : "errors"} ↓`
+      : `error ${errIdx.indexOf(errCursor) + 1}/${errIdx.length} ↓`;
     chip.innerHTML = `<span class="d"></span>${esc(label)}`;
   }
-  followBtn.hidden = follow;
-  followBtn.textContent = newSinceFollow ? `↓ ${newSinceFollow} new` : (followBtn.dataset.label || "↓ Resume follow");
-  const filtered = !!(logFilter.trim() || errOnly);
-  $("#logCount").textContent = s ? (filtered ? `${shown.length}/${raw.length} lines` : `${raw.length} lines`) : "";
-  $("#logCount").title = s ? `~/.devboard/logs/${s.id}.log` : "";
+
+  const rules = hideRules[s.id] ?? [];
+  const hideChip = $("#hideChip");
+  hideChip.hidden = rules.length === 0;
+  if (rules.length) {
+    hideChip.textContent = `${rules.length} hidden`;
+    hideChip.classList.toggle("on", !hideOn);
+    hideChip.title = `${rules.length} hide rule${rules.length === 1 ? "" : "s"}: ${rules.join(" · ")}\n${hideOn ? "Click to show what they catch, dimmed" : "Click to hide them again"}`;
+  }
+
+  $("#runBtn").classList.toggle("on", runOnly);
+  const freeze = $("#freezeBtn");
+  freeze.textContent = frozen ? (held ? `▶ Live · +${held}` : "▶ Live") : "⏸ Freeze";
+  freeze.classList.toggle("on", frozen);
+
+  const cleared = viewStart[s.id] != null;
+  const filtered = !!(logQuery.trim() || levelsLabel(levels) !== "All levels" || runOnly || cleared);
+  const lines = filtered ? `${shown.length}/${raw.length} lines` : `${raw.length} lines`;
+  count.innerHTML = cleared
+    ? `${esc(lines)} · cleared · <button type="button" class="link" data-act="show-all">show all</button>`
+    : esc(lines);
+  count.title = `~/.devboard/logs/${s.id}.log`;
 }
 
 function paintTraceBody() {
@@ -563,7 +756,8 @@ function paintTraceBody() {
       return `<div class="log-line ${lineKind(h)}" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${h.i}" title="Open this log at this line">
       <span class="ln">${h.i + 1}</span>
       ${t ? `<span class="t">${esc(t)}</span>` : ""}
-      <span>${linkIds(entryBody(h), h.ids)}</span>
+      <span class="lvl">${levelBadge(h.level)}</span>
+      <span class="c">${richText(contentParts(h).text, h)}</span>
     </div>`;
     }).join("");
     return `<div class="trace-group"><div class="trace-svc">${esc(nameOf(g.id))}</div>${hits}</div>`;
@@ -571,25 +765,228 @@ function paintTraceBody() {
   body.innerHTML = `<div class="trace"><div class="trace-head"><span class="trace-tok">${esc(trace.token)}</span>${chips}</div>${blocks}</div>`;
 }
 
-/** A log has a time column when any entry in the buffer printed one. */
+/** A log has a time column when the `···` toggle is on and an entry in the buffer printed one. */
 function showTimeFor(id) {
-  return entriesOf(id).some((e) => formatLogTime(e.time));
+  return showTs && entriesOf(id).some((e) => formatLogTime(e.time));
 }
 
 function caretHtml(s) {
   return rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "";
 }
 
-function logLineHtml(s, e, showTime) {
+/** Is this line's JSON context open? `ctxAll` flips the default, so ⌥click opens the whole pane. */
+function ctxIsOpen(key) {
+  return ctxAll !== ctxOpen.has(key);
+}
+
+function ctxBlock(e, key) {
+  if (!e.ctx || !ctxIsOpen(key)) return "";
+  const tokens = ctxTokens(prettyCtx(e.ctx))
+    .map((t) => (t.kind ? `<span class="j-${esc(t.kind)}">${esc(t.text)}</span>` : esc(t.text)))
+    .join("");
+  return `<pre class="ctx">${tokens}</pre>`;
+}
+
+/** Open a `file:line:col` from a log line in the editor, resolved against the service's cwd. */
+async function openPath(data) {
+  const s = selected();
+  const body = { path: data.path, cwd: s?.cwd };
+  if (data.line) body.line = Number(data.line);
+  if (data.col) body.col = Number(data.col);
+  try {
+    const res = await api("POST", "/api/open", body);
+    toast(`${res.cmd} ${home(res.path || data.path)}`);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function entryByKey(id, key) {
+  return entriesOf(id)[key - baseOf(id)] ?? null;
+}
+
+/** Open or close one line's context in place, so the reading position survives the click. */
+function syncCtxNode(node) {
+  const btn = node.querySelector(".ctx-btn");
+  if (!btn) return;
+  const key = Number(btn.dataset.key);
+  const entry = entryByKey(selected()?.id, key);
+  if (!entry) return;
+  const open = ctxIsOpen(key);
+  btn.classList.toggle("on", open);
+  const pre = node.querySelector("pre.ctx");
+  if (open && !pre) node.insertAdjacentHTML("beforeend", ctxBlock(entry, key));
+  else if (!open && pre) pre.remove();
+}
+
+function toggleCtx(key, all) {
+  if (all) {
+    ctxAll = !ctxAll;
+    ctxOpen.clear();
+  } else if (ctxOpen.has(key)) ctxOpen.delete(key);
+  else ctxOpen.add(key);
+  const body = $("#logBody");
+  const nodes = all ? [...body.querySelectorAll(".log-line")] : [document.getElementById(`log-${selected()?.id}-${key}`)];
+  for (const node of nodes) if (node) syncCtxNode(node);
+}
+
+/** Logger, message, and the chevron that folds the trailing JSON. The badge already carries the level. */
+function contentHtml(e, key) {
+  const { logger, text, ctx } = contentParts(e);
+  const lg = logger
+    ? `<button type="button" class="lg" data-act="logger" data-logger="${esc(logger)}" title="Search this logger">${esc(logger)}</button>`
+    : "";
+  const chevron = ctx
+    ? `<button type="button" class="ctx-btn${ctxIsOpen(key) ? " on" : ""}" data-act="ctx" data-key="${key}" title="JSON context · ⌥click toggles every line">{…}</button>`
+    : "";
+  return `${lg}${richText(text, e, matchSpans(text, compileFilter(logQuery)))}${chevron}`;
+}
+
+function logLineHtml(s, e, showTime, opts = {}) {
   const t = formatLogTime(e.time);
   const tid = entryTid(e);
   const key = baseOf(s.id) + e.i;
-  return `<div class="log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}" data-i="${key}" id="log-${esc(s.id)}-${key}" title="Click to copy line">
+  const hit = matchCursor === key ? " hit" : "";
+  // With the chip off the hidden lines stay, dimmed, so a rule can be checked against them.
+  const muted = !hideOn && isHidden(e, hideRules[s.id]) ? " muted" : "";
+  const cls = opts.cont
+    ? `log-line cont${hit}${muted}`
+    : `log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}${hit}${muted}`;
+  return `<div class="${cls}" data-i="${key}" title="Click to copy">
       <span class="ln">${key + 1}</span>
+      ${opts.repeat > 1 ? `<span class="rep" title="the same line ${opts.repeat} times">×${opts.repeat}</span>` : ""}
       ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
+      <span class="lvl">${opts.cont ? "" : levelBadge(e.level)}</span>
       ${tid ? `<span class="log-tid" title="request id">${esc(tid)}</span>` : ""}
-      <span>${linkIds(entryBody(e), e.ids)}</span>
+      <span class="c">${contentHtml(e, key)}${opts.fold ?? ""}</span>
+      ${ctxBlock(e, key)}
     </div>`;
+}
+
+/** Is this group's folded tail open? The newest crash opens itself once; the Set holds the rest. */
+function tailIsOpen(key) {
+  return tailOpen.has(key);
+}
+
+/** Which run each `start` marker opens, counted over the buffer. */
+function runNumbers(id) {
+  const map = new Map();
+  runBoundaries(entriesOf(id), baseOf(id)).forEach((key, n) => map.set(key, n + 1));
+  return map;
+}
+
+function dividerHtml(entry, run, cls = "") {
+  return `<div class="log-div ${cls}"><span>${esc(markerLabel(entry, run))}</span></div>`;
+}
+
+function unreadDividerHtml(entry) {
+  return `<div class="log-div new" id="unread-div"><span>${esc(unreadLabel(entry))}</span></div>`;
+}
+
+/** The body's groups, with the run dividers they carry and the unread divider once. */
+function renderGroups(s, groups, showTime, opts = {}) {
+  const base = baseOf(s.id);
+  const runs = runNumbers(s.id);
+  let drawUnread = opts.unread !== false && unreadKey != null;
+  let html = "";
+  for (const g of groups) {
+    const key = base + g.head.i;
+    if (drawUnread && key >= unreadKey) {
+      html += unreadDividerHtml(g.head);
+      drawUnread = false;
+    }
+    html += groupHtml(s, g, showTime, runs);
+  }
+  return html;
+}
+
+/** One group: the head line, its `▶ +N lines` chevron, and the tail when it is open. */
+function groupHtml(s, g, showTime, runs) {
+  const key = baseOf(s.id) + g.head.i;
+  if (g.head.marker) {
+    return `<div class="log-group" data-i="${key}" id="log-${esc(s.id)}-${key}">${dividerHtml(g.head, runs?.get(key) ?? 1)}</div>`;
+  }
+  const open = tailIsOpen(key);
+  const fold = g.tail.length
+    ? `<button type="button" class="fold" data-act="fold" data-key="${key}">${open ? "▼" : "▶"} +${g.tail.length} lines</button>`
+    : "";
+  const head = logLineHtml(s, g.head, showTime, { repeat: g.repeat, fold });
+  const tail = g.tail.length && open ? tailHtml(s, g, showTime) : "";
+  return `<div class="log-group" data-i="${key}" id="log-${esc(s.id)}-${key}">${head}${tail}</div>`;
+}
+
+function tailHtml(s, g, showTime) {
+  return `<div class="log-tail">${g.tail.map((e) => logLineHtml(s, e, showTime, { cont: true })).join("")}</div>`;
+}
+
+/**
+ * The newest error group with frames under it opens itself; when a newer one arrives the
+ * older one closes again, so exactly one crash is open unless you opened others by hand.
+ */
+function autoOpenNewestCrash(groups, base) {
+  let key = null;
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const g = groups[i];
+    if (g.head.level === "error" && g.tail.length) { key = base + g.head.i; break; }
+  }
+  if (key === autoOpenKey) return;
+  if (autoOpenKey != null && autoOpened.has(autoOpenKey)) {
+    autoOpened.delete(autoOpenKey);
+    setFold(autoOpenKey, false);
+  }
+  autoOpenKey = key;
+  if (key != null && !autoOpened.has(key)) {
+    autoOpened.add(key);
+    setFold(key, true);
+  }
+}
+
+/** The group a line belongs to: walk back over the frames to the line that carries them. */
+function groupKeyFor(key) {
+  const base = baseOf(sel);
+  let k = key;
+  while (k > base && entryByKey(sel, k)?.cont) k--;
+  return k;
+}
+
+function groupOf(key) {
+  const entries = entriesOf(sel);
+  const at = key - baseOf(sel);
+  const head = entries[at];
+  if (!head) return null;
+  const tail = [];
+  for (let k = at + 1; k < entries.length && entries[k].cont; k++) tail.push(entries[k]);
+  return { head, tail };
+}
+
+/** Open or close one tail in place, so the reading position survives the click. */
+function setFold(key, open) {
+  if (open) tailOpen.add(key);
+  else tailOpen.delete(key);
+  const s = selected();
+  const node = s ? document.getElementById(`log-${s.id}-${key}`) : null;
+  if (!node) return; // not rendered yet; the next render reads the Set
+  const existing = node.querySelector(".log-tail");
+  const g = groupOf(key);
+  if (open && !existing && g) node.insertAdjacentHTML("beforeend", tailHtml(s, g, showTimeFor(s.id)));
+  else if (!open && existing) existing.remove();
+  const btn = node.querySelector("button.fold");
+  if (btn && g) btn.textContent = `${open ? "▼" : "▶"} +${g.tail.length} lines`;
+}
+
+function toggleFold(key) {
+  setFold(key, !tailIsOpen(key));
+}
+
+/** Bring a line into view, opening the group that holds it when it is folded away. */
+function revealKey(key) {
+  const s = selected();
+  if (!s) return;
+  const head = groupKeyFor(key);
+  if (head !== key && !tailIsOpen(head)) toggleFold(head);
+  const c = $("#logBody");
+  const el = document.getElementById(`log-${s.id}-${head}`);
+  if (c && el) c.scrollTop = el.offsetTop - c.offsetTop - Math.min(80, c.clientHeight / 3);
 }
 
 /** Full repaint. Runs only when view state changes: selection, filter, level, follow, status. */
@@ -622,7 +1019,7 @@ function rebuildBody(s) {
     } else {
       body.innerHTML = caretHtml(s);
       logRendered = { id: s.id, mode: "caret" };
-      if (follow) body.scrollTop = body.scrollHeight;
+      if (!frozen) body.scrollTop = body.scrollHeight;
       return;
     }
     body.innerHTML = `<div class="empty"><span>${esc(text)}</span>${startBtn}</div>`;
@@ -631,38 +1028,68 @@ function rebuildBody(s) {
   }
 
   const showTime = showTimeFor(s.id);
-  body.innerHTML = shown.map((e) => logLineHtml(s, e, showTime)).join("") + caretHtml(s);
-  logRendered = { id: s.id, mode: "lines", showTime };
-  if (follow) body.scrollTop = body.scrollHeight;
+  const base = baseOf(s.id);
+  const groups = shownGroups(s);
+  autoOpenNewestCrash(groups, base);
+  body.innerHTML = renderGroups(s, groups, showTime) + caretHtml(s);
+  logRendered = { id: s.id, mode: "lines", showTime, lastKey: base + groups[groups.length - 1].head.i };
+  if (!frozen) body.scrollTop = body.scrollHeight;
 }
 
-/** Append path: new entries become nodes at the tail, no rebuild. */
+/**
+ * Append path: re-render the last group (a frame or a repeat may have joined it) and add
+ * the groups after it. No rebuild, so 10 000 lines are not re-created every second.
+ */
+function syncGroups(s, body, showTime, added) {
+  const groups = shownGroups(s);
+  if (!groups.length) return false;
+  const base = baseOf(s.id);
+  const lastKey = logRendered.lastKey;
+  let from = 0;
+  if (lastKey != null) {
+    const node = document.getElementById(`log-${s.id}-${lastKey}`);
+    if (!node) return false;
+    from = groups.findIndex((g) => base + g.end >= lastKey);
+    if (from < 0) return false;
+    node.remove();
+  }
+  autoOpenNewestCrash(groups, base);
+  const html = renderGroups(s, groups.slice(from), showTime, { unread: !document.getElementById("unread-div") });
+  const caret = body.querySelector(".caret");
+  if (caret) caret.insertAdjacentHTML("beforebegin", html);
+  else body.insertAdjacentHTML("beforeend", html);
+  logRendered.lastKey = base + groups[groups.length - 1].head.i;
+  return true;
+}
+
 function appendToLog(s, added, base) {
   const body = $("#logBody");
   const showTime = showTimeFor(s.id);
+  // Frozen: the buffer keeps filling and the count on the button goes up; the DOM does not move.
+  if (frozen) {
+    held += added.filter((e) => matchesEntry(e, viewState())).length;
+    return;
+  }
   if (trace || logDirty || logRendered?.id !== s.id || logRendered.mode !== "lines" || logRendered.showTime !== showTime) {
     markLogDirty();
     paintLogBody(s);
     return;
   }
-  const visible = added.filter((e) => matchesEntry(e, viewState()));
-  if (visible.length) {
-    const html = visible.map((e) => logLineHtml(s, e, showTime)).join("");
-    const caret = body.querySelector(".caret");
-    if (caret) caret.insertAdjacentHTML("beforebegin", html);
-    else body.insertAdjacentHTML("beforeend", html);
-    if (!follow) newSinceFollow += visible.length;
+  if (!syncGroups(s, body, showTime, added)) {
+    markLogDirty();
+    paintLogBody(s);
+    return;
   }
   if (base) dropLeadingLines(body, base);
   const caret = body.querySelector(".caret");
   if (rowState(s) === "on" && !caret) body.insertAdjacentHTML("beforeend", caretHtml(s));
   else if (rowState(s) !== "on" && caret) caret.remove();
-  if (follow) body.scrollTop = body.scrollHeight;
+  if (!frozen) body.scrollTop = body.scrollHeight;
 }
 
 function paintLogBody(s) {
   if (!logDirty) {
-    if (follow) { const b = $("#logBody"); b.scrollTop = b.scrollHeight; }
+    if (!frozen) { const b = $("#logBody"); b.scrollTop = b.scrollHeight; }
     return;
   }
   logDirty = false;
@@ -693,31 +1120,85 @@ function render() {
 
 function select(id) {
   if (!id || sel === id) { saveSel(id); paintList(); return; }
+  // Where this log was when you looked away, so coming back can say what is new.
+  if (sel) lastSeen[sel] = baseOf(sel) + entriesOf(sel).length;
+  unreadKey = lastSeen[id] ?? null;
   saveSel(id);
   errCursor = null;
   jumpLine = null;
+  // Line keys belong to one log, so the folds and open contexts of the old one go.
+  ctxOpen.clear();
+  ctxAll = false;
+  tailOpen.clear();
+  autoOpened.clear();
+  autoOpenKey = null;
+  frozen = false;
+  held = 0;
+  matchCursor = null;
+  logQuery = queries[id] ?? "";
+  $("#logSearch").value = logQuery;
   if (trace) { trace = null; }
   markLogDirty();
   paintList();
   paintLog();
-  if (follow) $("#logBody").scrollTop = $("#logBody").scrollHeight;
+  if (!frozen) $("#logBody").scrollTop = $("#logBody").scrollHeight;
   fetchLog(id);
 }
 
-function nextErr() {
+/** `e` forward, `E` back, wrapping at either end. Stops are heads, so a crash is one stop. */
+function stepErr(dir) {
   const s = selected();
   if (!s) return;
-  const idx = errorIndexes(entriesOf(s.id), baseOf(s.id));
+  const idx = errorKeys(s);
   if (!idx.length) return;
-  const cur = errCursor == null ? -1 : errCursor;
-  const next = idx.find((i) => i > cur) ?? idx[0];
+  const cur = errCursor;
+  const next = dir > 0
+    ? idx.find((i) => i > (cur ?? -1)) ?? idx[0]
+    : [...idx].reverse().find((i) => i < (cur ?? Infinity)) ?? idx[idx.length - 1];
   errCursor = next;
-  setFollow(false);
+  setFrozen(true);
   markLogDirty();
   paintLog();
-  const c = $("#logBody");
-  const el = document.getElementById(`log-${s.id}-${next}`);
-  if (c && el) c.scrollTop = el.offsetTop - c.offsetTop - Math.min(80, c.clientHeight / 3);
+  revealKey(next);
+}
+
+/** Append what the freeze held, land on the tail, and follow again. */
+function goLive() {
+  const s = selected();
+  setFrozen(false);
+  // Reaching the tail is what makes "new since" stop being true.
+  if (unreadKey != null) { unreadKey = null; if (s) delete lastSeen[s.id]; markLogDirty(); }
+  if (s) appendToLog(s, [], baseOf(s.id));
+  $("#logBody").scrollTop = $("#logBody").scrollHeight;
+  paintLog();
+}
+
+/** Turn what is in the search field into a hide rule for this service and clear the field. */
+function addHideRule() {
+  const s = selected();
+  const text = logQuery.trim();
+  if (!s?.id || !text) return;
+  const rules = hideRules[s.id] ?? (hideRules[s.id] = []);
+  if (!rules.includes(text)) rules.push(text);
+  saveHideRules();
+  hideOn = true;
+  searchFor("");
+  toast(`hiding · ${text}`);
+}
+
+/** Clear the view, not the file: hide everything before now. `show all` puts it back. */
+function clearView(showAll) {
+  const s = selected();
+  if (!s) return;
+  if (showAll) delete viewStart[s.id];
+  else viewStart[s.id] = baseOf(s.id) + entriesOf(s.id).length;
+  errCursor = null;
+  markLogDirty();
+  paintLog();
+}
+
+function applyWrap() {
+  $("#logBody").classList.toggle("nowrap", !wrap);
 }
 
 function moveSel(dir) {
@@ -1017,12 +1498,12 @@ function trimBuffer(buf) {
   return over;
 }
 
-/** Drop the rendered lines that fell out of the buffer, keeping the reading position. */
+/** Drop the rendered groups that fell out of the buffer, keeping the reading position. */
 function dropLeadingLines(body, base) {
   const top = body.scrollTop;
   const height = body.scrollHeight;
   let node = body.firstElementChild;
-  while (node && node.classList.contains("log-line") && Number(node.dataset.i) < base) {
+  while (node && node.classList.contains("log-group") && Number(node.dataset.i) < base) {
     const next = node.nextElementSibling;
     node.remove();
     node = next;
@@ -1030,7 +1511,7 @@ function dropLeadingLines(body, base) {
   const removed = height - body.scrollHeight;
   // Absolute, not relative: the browser may have anchored the scroll itself, and
   // subtracting the removed height a second time would slide the view backwards.
-  if (removed > 0 && !follow) body.scrollTop = Math.max(0, top - removed);
+  if (removed > 0 && frozen) body.scrollTop = Math.max(0, top - removed);
 }
 
 /**
@@ -1053,6 +1534,9 @@ async function fetchLog(id, opts = {}) {
     const incoming = data.entries || [];
     if (full) {
       logs[id] = { entries: incoming.map((e, k) => ({ ...e, i: k })), next: data.next ?? data.size ?? 0, base: 0 };
+      // A full reload renumbers from zero, so anything keyed to the old window is stale.
+      delete lastSeen[id];
+      if (id === sel) unreadKey = null;
       if (id !== sel) { paintChrome(); paintList(); return; }
       markLogDirty();
       paintLog();
@@ -1085,17 +1569,34 @@ async function refresh() {
 const refreshSoon = () => [700, 1600, 3000].forEach((ms) => setTimeout(refresh, ms));
 
 document.addEventListener("click", async (ev) => {
-  if (menu && !ev.target.closest(".menu") && !ev.target.closest("#moreBtn") && !ev.target.closest("#logMenuBtn")) closeMenu();
+  if (menu && !ev.target.closest(".menu") && !ev.target.closest("#moreBtn") && !ev.target.closest("#logMenuBtn") && !ev.target.closest("#levelsBtn")) closeMenu();
   if (ev.target.closest("a[href]")) return;
 
   const idBtn = ev.target.closest(".log-id");
   if (idBtn?.dataset.token) { openTrace(idBtn.dataset.token); return; }
 
+  const foldBtn = ev.target.closest("button[data-act=fold]");
+  if (foldBtn) { toggleFold(Number(foldBtn.dataset.key)); return; }
+
+  const ctxBtn = ev.target.closest("button[data-act=ctx]");
+  if (ctxBtn) { toggleCtx(Number(ctxBtn.dataset.key), ev.altKey); return; }
+
+  const lgBtn = ev.target.closest("button[data-act=logger]");
+  if (lgBtn) { searchFor(lgBtn.dataset.logger || ""); return; }
+
+  const pathBtn = ev.target.closest("button[data-act=open-path]");
+  if (pathBtn) { openPath(pathBtn.dataset); return; }
+
   const line = ev.target.closest(".log-line");
   if (line && !ev.target.closest("button") && line.dataset.act !== "trace-jump") {
     const s = selected();
-    const rec = entriesOf(s?.id)[Number(line.dataset.i) - baseOf(s?.id)];
-    if (rec) copy(entryBody(rec) || rec.text);
+    const key = Number(line.dataset.i);
+    const rec = entryByKey(s?.id, key);
+    if (!rec) return;
+    // A head copies the whole dump; a frame copies the frame.
+    const head = line.closest(".log-group");
+    const g = head && Number(head.dataset.i) === key ? groupOf(key) : null;
+    copy(g?.tail.length ? [g.head, ...g.tail].map((x) => x.text).join("\n") : entryBody(rec) || rec.text);
     return;
   }
 
@@ -1138,11 +1639,46 @@ document.addEventListener("click", async (ev) => {
     if (p) window.open(`http://localhost:${p}`, "_blank", "noopener");
     return;
   }
-  if (act === "toggle-err-only") { closeMenu(); errOnly = !errOnly; markLogDirty(); paintLog(); return; }
-  if (act === "toggle-follow") {
+  if (act === "toggle-wrap") { closeMenu(); wrap = !wrap; saveLogView(); applyWrap(); paintLog(); return; }
+  if (act === "toggle-ts") { closeMenu(); showTs = !showTs; saveLogView(); markLogDirty(); paintLog(); return; }
+  if (act === "expand-json") { closeMenu(); toggleCtx(null, true); paintLog(); return; }
+  if (act === "copy-visible" && s) { closeMenu(); copy(shownEntries(s).map((e) => e.text).join("\n")); return; }
+  if (act === "copy-last-error" && s) {
     closeMenu();
-    setFollow(!follow);
-    if (follow) $("#logBody").scrollTop = $("#logBody").scrollHeight;
+    const keys = errorKeys(s);
+    const g = keys.length ? groupOf(keys[keys.length - 1]) : null;
+    copy(g ? [g.head, ...g.tail].map((x) => x.text).join("\n") : "no error in this log");
+    return;
+  }
+  if (act === "level") {
+    const level = btn.dataset.level;
+    if (levels.has(level)) levels.delete(level);
+    else levels.add(level);
+    saveLogView();
+    markLogDirty();
+    paintLog();
+    return;
+  }
+  if (act === "levels-all" || act === "levels-errors") {
+    levels.clear();
+    for (const l of act === "levels-all" ? LEVELS : ["error"]) levels.add(l);
+    saveLogView();
+    closeMenu();
+    markLogDirty();
+    paintLog();
+    return;
+  }
+  if (act === "show-all") { clearView(true); return; }
+  if (act === "match-next") { stepMatch(1); return; }
+  if (act === "match-prev") { stepMatch(-1); return; }
+  if (act === "match-mode") { hideNonMatching = !hideNonMatching; markLogDirty(); paintLog(); return; }
+  if (act === "hide-these") { addHideRule(); return; }
+  if (act === "forget-hide") {
+    closeMenu();
+    if (s?.id) delete hideRules[s.id];
+    saveHideRules();
+    hideOn = true;
+    markLogDirty();
     paintLog();
     return;
   }
@@ -1342,21 +1878,32 @@ $("#moreBtn").onclick = (ev) => setMenu("top", ev);
 $("#addBtn").onclick = () => { closeMenu(); toggleAdd(); };
 $("#addCancel").onclick = () => { addOpen = false; $("#addForm").hidden = true; };
 $("#q").oninput = (ev) => { query = ev.target.value; paintList(); };
-$("#logFilter").oninput = (ev) => { logFilter = ev.target.value; markLogDirty(); paintLog(); };
-$("#errChip").onclick = (ev) => {
-  if (ev.shiftKey) { errOnly = !errOnly; markLogDirty(); paintLog(); }
-  else nextErr();
-};
-$("#followBtn").onclick = () => {
-  setFollow(true);
-  $("#logBody").scrollTop = $("#logBody").scrollHeight;
+$("#logSearch").oninput = (ev) => {
+  logQuery = ev.target.value;
+  if (sel) queries[sel] = logQuery;
+  matchCursor = null;
+  markLogDirty();
   paintLog();
 };
+$("#logSearch").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); stepMatch(ev.shiftKey ? -1 : 1); return; }
+  if (ev.key !== "Escape") return;
+  ev.stopPropagation();
+  searchFor("");
+  ev.target.blur();
+});
+$("#errChip").onclick = () => stepErr(1);
+$("#levelsBtn").onclick = (ev) => setMenu("levels", ev);
+$("#runBtn").onclick = () => { runOnly = !runOnly; saveLogView(); markLogDirty(); paintLog(); };
+$("#freezeBtn").onclick = () => { if (frozen) goLive(); else { setFrozen(true); paintLog(); } };
+$("#clearBtn").onclick = () => clearView(false);
+$("#hideChip").onclick = () => { hideOn = !hideOn; markLogDirty(); paintLog(); };
 $("#logBody").addEventListener("scroll", () => {
   const b = $("#logBody");
   const atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 8;
-  if (!atBottom && follow) { setFollow(false); paintLogTools(selected()); }
-  else if (atBottom && !follow) { setFollow(true); paintLogTools(selected()); }
+  // Scrolling away from the tail is the same state as pressing Freeze, and has the same way back.
+  if (!atBottom && !frozen) { setFrozen(true); paintLogTools(selected()); }
+  else if (atBottom && frozen && !held) { setFrozen(false); paintLogTools(selected()); }
 });
 $("#overlay").addEventListener("click", (ev) => { if (ev.target === $("#overlay")) closeSheet(); });
 
@@ -1498,6 +2045,7 @@ document.addEventListener("keydown", (ev) => {
     if (addOpen) { addOpen = false; $("#addForm").hidden = true; }
     return;
   }
+  if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "K")) { ev.preventDefault(); clearView(false); return; }
   if (typing) return;
   if (ev.key === "/") { ev.preventDefault(); $("#q").focus(); return; }
   if (overlayOpen()) return;
@@ -1505,7 +2053,11 @@ document.addEventListener("keydown", (ev) => {
   else if (ev.key === "ArrowUp" || ev.key === "k") { ev.preventDefault(); moveSel(-1); }
   else if (ev.key === " ") { ev.preventDefault(); const s = selected(); if (s) toggle(s); }
   else if (ev.key === "r") { const s = selected(); if (s?.status === "running") restart(s); }
-  else if (ev.key === "e") { ev.preventDefault(); nextErr(); }
+  else if (ev.key === "f") { ev.preventDefault(); $("#logSearch").focus(); }
+  else if (ev.key === "e" || ev.key === "E") { ev.preventDefault(); stepErr(ev.key === "E" ? -1 : 1); }
+  else if (ev.key === "n" || ev.key === "N") { ev.preventDefault(); stepMatch(ev.key === "N" ? -1 : 1); }
+  else if (ev.key === "g") { ev.preventDefault(); setFrozen(true); $("#logBody").scrollTop = 0; paintLog(); }
+  else if (ev.key === "G") { ev.preventDefault(); goLive(); }
   else if (ev.key === "c" && !ev.metaKey && !ev.ctrlKey) { const s = selected(); if (s) copy(runCmd(s)); }
   else if (ev.key === "o" && !ev.metaKey && !ev.ctrlKey) {
     const s = selected();
@@ -1516,6 +2068,7 @@ document.addEventListener("keydown", (ev) => {
 
 paintClock();
 paintChrome();
+applyWrap();
 refresh();
 setInterval(paintClock, 1000);
 setInterval(refresh, 3000);

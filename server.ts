@@ -15,7 +15,7 @@ import { CrashWatch } from "./lib/restarts";
 import { suggestCommands } from "./lib/suggest";
 import { parsePinTemplate, planImport, readTemplateFile } from "./lib/template";
 import type { LogEntry, Pinned, ProjectLink, RunningService, Service, StartSpec, WorktreeInfo } from "./lib/types";
-import { blockingWorktreeServices, createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, retireWorktree, scanWorktrees } from "./lib/worktrees";
+import { blockingWorktreeServices, createWorktree, mainRepoOf, openInEditor, planWorktreeLaunch, pruneStaleWorktrees, removeOrphanedWorktree, resolveOpenPath, retireWorktree, scanWorktrees } from "./lib/worktrees";
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
 
@@ -567,9 +567,13 @@ export function createHandler(deps: Deps): BoardHandler {
       }
 
       if (method === "POST" && pathname === "/api/open") {
-        const { path } = await readBody(req);
+        const { path, line, col, cwd } = await readBody(req);
         if (typeof path !== "string" || !path.trim()) return fail("path required");
-        return json(await openInEditor(path));
+        // A log line prints a path relative to the process that printed it.
+        const target = resolveOpenPath(path, typeof cwd === "string" ? cwd : undefined);
+        if (!existsSync(target)) return fail(`path does not exist: ${target}`);
+        const at = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
+        return json(await openInEditor(target, at(line), at(col)));
       }
 
       if (method === "GET" && pathname === "/api/attention") {

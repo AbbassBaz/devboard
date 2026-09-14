@@ -66,10 +66,20 @@
     <div class="log-a" id="logA"></div>
     <div class="log-b" id="logB"></div>
     <div class="log-tools">
-      <input id="logFilter" placeholder="Filter log lines" autocomplete="off" spellcheck="false">
-      <button type="button" id="errChip" hidden title="Jump to next error (e) · ⇧click: errors only"></button>
-      <button type="button" id="followBtn" hidden data-label="↓ Resume follow" title="Resume following new lines">↓ Resume follow</button>
-      <button type="button" id="traceClose" hidden data-act="close-trace" title="Close trace (Esc)">Close trace</button>
+      <span class="log-search" id="searchWrap">
+        <input id="logSearch" placeholder="Search log  f" autocomplete="off" spellcheck="false">
+        <span class="search-tools" id="searchTools" hidden></span>
+      </span>
+      <span class="menu-wrap">
+        <button type="button" id="levelsBtn" title="Filter by level">All levels ▾</button>
+        <div class="menu levels" id="levelsMenu" hidden></div>
+      </span>
+      <button type="button" id="errChip" hidden title="Jump to the next error (e · ⇧E back)"></button>
+      <button type="button" id="runBtn" title="Show only the lines since the last start">This run</button>
+      <button type="button" id="freezeBtn" title="Freeze the view · the buffer keeps filling">⏸ Freeze</button>
+      <button type="button" id="clearBtn" title="Clear the view (⌘K) · the log file is untouched">Clear</button>
+      <button type="button" id="hideChip" hidden title="Hide rules for this service"></button>
+      <button type="button" id="closeBtn" hidden data-act="close-trace" title="Close (Esc)">Close</button>
       <span class="log-n" id="logCount" title=""></span>
     </div>
     <div id="logBody"></div>
@@ -81,10 +91,13 @@
     <span><b>↑↓</b> select</span>
     <span><b>␣</b> on/off</span>
     <span><b>r</b> restart</span>
-    <span><b>e</b> next err</span>
     <span><b>c</b> copy run cmd</span>
     <span><b>o</b> open</span>
     <span><b>/</b> filter</span>
+    <span><b>f</b> search</span>
+    <span><b>e/E</b> err</span>
+    <span><b>⌘K</b> clear</span>
+    <span><b>g/G</b> top/tail</span>
   </span>
   <span class="toast" id="toast" hidden></span>
   <span class="poll" id="poll"></span>

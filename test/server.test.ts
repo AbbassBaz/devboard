@@ -825,3 +825,19 @@ describe("tracked process status", () => {
     rmSync(badHome, { recursive: true, force: true });
   });
 });
+
+describe("POST /api/open", () => {
+  test("refuses a path that does not exist under the service's cwd", async () => {
+    const res = await call("POST", "/api/open", { path: "nope.ts", cwd: home });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("path does not exist");
+    expect(body.error).toContain(home);
+    const empty = await call("POST", "/api/open", { path: "  " });
+    expect(empty.status).toBe(400);
+    expect((await empty.json()).error).toBe("path required");
+  });
+
+  // The happy path spawns a real editor, so the route's resolution is covered on
+  // `resolveOpenPath` in test/worktrees.test.ts instead of here.
+});
