@@ -74,3 +74,118 @@ export function errorIndexes(entries, base = 0) {
   }
   return out;
 }
+
+/** The 3-character gutter badge. `other` has none, so a marker line stays quiet. */
+export function levelBadge(level) {
+  if (level === "error") return "ERR";
+  if (level === "warn") return "WRN";
+  if (level === "info") return "INF";
+  if (level === "debug") return "DBG";
+  return "";
+}
+
+/**
+ * What the content column shows once the badge carries the level: the logger, the
+ * message, and the JSON context that folds behind a chevron.
+ */
+export function contentParts(entry) {
+  if (!entry) return { text: "" };
+  if (entry.marker) return { text: entryBody(entry) };
+  const out = { text: entry.msg ?? entryBody(entry) };
+  if (entry.logger) out.logger = entry.logger;
+  if (entry.ctx) out.ctx = entry.ctx;
+  return out;
+}
+
+/** A folded context, pretty-printed at 2-space indent. Text that is not JSON comes back as it is. */
+export function prettyCtx(ctx) {
+  const text = String(ctx ?? "");
+  try {
+    const value = JSON.parse(text);
+    if (value === null || typeof value !== "object") return text;
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return text;
+  }
+}
+
+const JSON_TOKEN = /("(?:[^"\\]|\\.)*")\s*:|("(?:[^"\\]|\\.)*")|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/g;
+
+/** Pretty-printed context split into `key`, `str`, `num`, and plain runs for colouring. */
+export function ctxTokens(pretty) {
+  const text = String(pretty ?? "");
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(JSON_TOKEN)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push({ text: text.slice(last, at), kind: "" });
+    const kind = m[1] ? "key" : m[2] ? "str" : "num";
+    const value = m[1] ?? m[2] ?? m[3];
+    out.push({ text: value, kind });
+    last = at + value.length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), kind: "" });
+  return out;
+}
+
+/** The class for an HTTP status: 2xx reads ok, 3xx dim, 4xx warn, 5xx error. */
+export function statusClass(status) {
+  if (status >= 500) return "s5";
+  if (status >= 400) return "s4";
+  if (status >= 300) return "s3";
+  return "s2";
+}
+
+/** Spans for the method, path, status, and duration of a request line, located in the rendered text. */
+export function httpSpans(text, http) {
+  if (!http || !text) return [];
+  const m = text.indexOf(http.method);
+  if (m < 0) return [];
+  const p = text.indexOf(http.path, m + http.method.length);
+  if (p < 0) return [];
+  const code = String(http.status);
+  const st = text.indexOf(code, p + http.path.length);
+  if (st < 0) return [];
+  const spans = [
+    { start: m, end: m + http.method.length, kind: "http", cls: "hm" },
+    { start: p, end: p + http.path.length, kind: "http", cls: "hp" },
+    { start: st, end: st + code.length, kind: "http", cls: statusClass(http.status) },
+  ];
+  if (http.ms != null) {
+    const ms = String(http.ms);
+    const at = text.indexOf(ms, st + code.length);
+    if (at >= 0) spans.push({ start: at, end: at + ms.length, kind: "http", cls: http.ms >= 1000 ? "hs" : "hd" });
+  }
+  return spans;
+}
+
+/** Spans for the id tokens the server found. A composite id yields to the part worth tracing. */
+export function idSpans(text, ids) {
+  const own = ids ?? [];
+  const wanted = own.filter((id) => !own.some((other) => other !== id && id.includes(other))).sort((a, b) => b.length - a.length);
+  const spans = [];
+  for (const id of wanted) {
+    let from = 0;
+    while (from < text.length) {
+      const at = text.indexOf(id, from);
+      if (at < 0) break;
+      spans.push({ start: at, end: at + id.length, kind: "id", value: id });
+      from = at + id.length;
+    }
+  }
+  return spans;
+}
+
+const SPAN_RANK = { id: 3, link: 2, path: 2, http: 1 };
+
+/** One set of non-overlapping spans in text order. A higher-ranked span wins the overlap. */
+export function mergeSpans(spans) {
+  const list = (spans ?? []).filter((s) => s && s.end > s.start);
+  const byRank = [...list].sort((a, b) => (SPAN_RANK[b.kind] ?? 0) - (SPAN_RANK[a.kind] ?? 0) || a.start - b.start || b.end - a.end);
+  const kept = [];
+  for (const s of byRank) {
+    if (kept.some((k) => s.start < k.end && k.start < s.end)) continue;
+    kept.push(s);
+  }
+  return kept.sort((a, b) => a.start - b.start);
+}

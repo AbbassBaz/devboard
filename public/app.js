@@ -1,4 +1,7 @@
-import { entryBody, entryTid, errorIndexes, formatLogTime, lineKind, matchesEntry, visibleEntries } from "./log-view.js";
+import {
+  contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans, idSpans,
+  levelBadge, lineKind, matchesEntry, mergeSpans, prettyCtx, visibleEntries,
+} from "./log-view.js";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -34,6 +37,10 @@ let logRendered = null;
 let newSinceFollow = 0;
 let trace = null;
 let jumpLine = null;
+/** Absolute line keys (`base + i`) whose JSON context is toggled away from the pane default. */
+const ctxOpen = new Set();
+/** ⌥click on any chevron flips the default for every line, so one click opens the pane. */
+let ctxAll = false;
 
 try { sel = localStorage.getItem("devboard.sel"); } catch {}
 try {
@@ -132,34 +139,23 @@ function openSheet(id) {
   $(`#${id}`).hidden = false;
 }
 
-function linkIds(text, all) {
-  // A composite token (a traceparent holds the trace id) is not worth tracing on its own: link the part.
-  const own = all ?? [];
-  const ids = own.filter((id) => !own.some((other) => other !== id && id.includes(other))).sort((a, b) => b.length - a.length);
-  if (!ids.length) return esc(text);
-  const spans = [];
-  for (const id of ids) {
-    let from = 0;
-    while (from < text.length) {
-      const i = text.indexOf(id, from);
-      if (i < 0) break;
-      spans.push({ start: i, end: i + id.length, id });
-      from = i + id.length;
-    }
-  }
-  spans.sort((a, b) => a.start - b.start || (b.end - a.end));
-  const kept = [];
-  let last = 0;
-  for (const s of spans) {
-    if (s.start < last) continue;
-    kept.push(s);
-    last = s.end;
-  }
+function spanHtml(span, inner) {
+  if (span.kind === "id") return `<button type="button" class="log-id" data-token="${esc(span.value)}">${inner}</button>`;
+  if (span.kind === "http") return `<span class="${esc(span.cls)}">${inner}</span>`;
+  return inner;
+}
+
+/**
+ * One line's text with the pieces the page can act on marked up: id tokens (F-29) and the
+ * method, path, status, and duration of a request line. Spans never overlap; ids win.
+ */
+function richText(text, entry) {
+  const spans = mergeSpans([...idSpans(text, entry?.ids), ...httpSpans(text, entry?.http)]);
   let html = "";
   let cur = 0;
-  for (const s of kept) {
+  for (const s of spans) {
     html += esc(text.slice(cur, s.start));
-    html += `<button type="button" class="log-id" data-token="${esc(s.id)}">${esc(s.id)}</button>`;
+    html += spanHtml(s, esc(text.slice(s.start, s.end)));
     cur = s.end;
   }
   return html + esc(text.slice(cur));
@@ -504,6 +500,15 @@ function shownEntries(s) {
   return visibleEntries(entriesOf(s?.id), viewState());
 }
 
+/** Put text in the log filter and apply it. Clicking a logger name is how you filter to one. */
+function searchFor(text) {
+  const field = $("#logFilter");
+  field.value = text;
+  logFilter = text;
+  markLogDirty();
+  paintLog();
+}
+
 function paintLogTools(s) {
   const raw = entriesOf(s?.id);
   const errIdx = errorIndexes(raw, baseOf(s?.id));
@@ -563,7 +568,8 @@ function paintTraceBody() {
       return `<div class="log-line ${lineKind(h)}" data-act="trace-jump" data-id="${esc(g.id)}" data-i="${h.i}" title="Open this log at this line">
       <span class="ln">${h.i + 1}</span>
       ${t ? `<span class="t">${esc(t)}</span>` : ""}
-      <span>${linkIds(entryBody(h), h.ids)}</span>
+      <span class="lvl">${levelBadge(h.level)}</span>
+      <span class="c">${richText(contentParts(h).text, h)}</span>
     </div>`;
     }).join("");
     return `<div class="trace-group"><div class="trace-svc">${esc(nameOf(g.id))}</div>${hits}</div>`;
@@ -580,6 +586,60 @@ function caretHtml(s) {
   return rowState(s) === "on" ? `<div class="caret"><span style="width:30px"></span><i></i></div>` : "";
 }
 
+/** Is this line's JSON context open? `ctxAll` flips the default, so ⌥click opens the whole pane. */
+function ctxIsOpen(key) {
+  return ctxAll !== ctxOpen.has(key);
+}
+
+function ctxBlock(e, key) {
+  if (!e.ctx || !ctxIsOpen(key)) return "";
+  const tokens = ctxTokens(prettyCtx(e.ctx))
+    .map((t) => (t.kind ? `<span class="j-${esc(t.kind)}">${esc(t.text)}</span>` : esc(t.text)))
+    .join("");
+  return `<pre class="ctx">${tokens}</pre>`;
+}
+
+function entryByKey(id, key) {
+  return entriesOf(id)[key - baseOf(id)] ?? null;
+}
+
+/** Open or close one line's context in place, so the reading position survives the click. */
+function syncCtxNode(node) {
+  const btn = node.querySelector(".ctx-btn");
+  if (!btn) return;
+  const key = Number(btn.dataset.key);
+  const entry = entryByKey(selected()?.id, key);
+  if (!entry) return;
+  const open = ctxIsOpen(key);
+  btn.classList.toggle("on", open);
+  const pre = node.querySelector("pre.ctx");
+  if (open && !pre) node.insertAdjacentHTML("beforeend", ctxBlock(entry, key));
+  else if (!open && pre) pre.remove();
+}
+
+function toggleCtx(key, all) {
+  if (all) {
+    ctxAll = !ctxAll;
+    ctxOpen.clear();
+  } else if (ctxOpen.has(key)) ctxOpen.delete(key);
+  else ctxOpen.add(key);
+  const body = $("#logBody");
+  const nodes = all ? [...body.querySelectorAll(".log-line")] : [document.getElementById(`log-${selected()?.id}-${key}`)];
+  for (const node of nodes) if (node) syncCtxNode(node);
+}
+
+/** Logger, message, and the chevron that folds the trailing JSON. The badge already carries the level. */
+function contentHtml(e, key) {
+  const { logger, text, ctx } = contentParts(e);
+  const lg = logger
+    ? `<button type="button" class="lg" data-act="logger" data-logger="${esc(logger)}" title="Search this logger">${esc(logger)}</button>`
+    : "";
+  const chevron = ctx
+    ? `<button type="button" class="ctx-btn${ctxIsOpen(key) ? " on" : ""}" data-act="ctx" data-key="${key}" title="JSON context · ⌥click toggles every line">{…}</button>`
+    : "";
+  return `${lg}${richText(text, e)}${chevron}`;
+}
+
 function logLineHtml(s, e, showTime) {
   const t = formatLogTime(e.time);
   const tid = entryTid(e);
@@ -587,8 +647,10 @@ function logLineHtml(s, e, showTime) {
   return `<div class="log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}" data-i="${key}" id="log-${esc(s.id)}-${key}" title="Click to copy line">
       <span class="ln">${key + 1}</span>
       ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
+      <span class="lvl">${levelBadge(e.level)}</span>
       ${tid ? `<span class="log-tid" title="request id">${esc(tid)}</span>` : ""}
-      <span>${linkIds(entryBody(e), e.ids)}</span>
+      <span class="c">${contentHtml(e, key)}</span>
+      ${ctxBlock(e, key)}
     </div>`;
 }
 
@@ -1090,6 +1152,12 @@ document.addEventListener("click", async (ev) => {
 
   const idBtn = ev.target.closest(".log-id");
   if (idBtn?.dataset.token) { openTrace(idBtn.dataset.token); return; }
+
+  const ctxBtn = ev.target.closest("button[data-act=ctx]");
+  if (ctxBtn) { toggleCtx(Number(ctxBtn.dataset.key), ev.altKey); return; }
+
+  const lgBtn = ev.target.closest("button[data-act=logger]");
+  if (lgBtn) { searchFor(lgBtn.dataset.logger || ""); return; }
 
   const line = ev.target.closest(".log-line");
   if (line && !ev.target.closest("button") && line.dataset.act !== "trace-jump") {

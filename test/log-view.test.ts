@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { parseLine } from "../lib/logs";
 // The page's pure half. It must import with no DOM, which is the whole point of the file.
-import { entryBody, entryTid, errorIndexes, formatLogTime, levelCounts, lineKind, matchesEntry, visibleEntries } from "../public/log-view.js";
+import {
+  contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans, idSpans, levelBadge,
+  levelCounts, lineKind, matchesEntry, mergeSpans, prettyCtx, statusClass, visibleEntries,
+} from "../public/log-view.js";
 
 async function fixtureEntries(name: string) {
   const text = await Bun.file(`${import.meta.dir}/fixtures/logs/${name}`).text();
@@ -89,5 +92,82 @@ describe("errorIndexes", () => {
     expect(plain.every((i) => entries[i].level === "error")).toBe(true);
     expect(errorIndexes(entries, 1000)).toEqual(plain.map((i) => i + 1000));
     expect(errorIndexes([])).toEqual([]);
+  });
+});
+
+describe("levelBadge and contentParts", () => {
+  test("the badge is three characters, and nothing for a level with no name", () => {
+    expect(levelBadge("error")).toBe("ERR");
+    expect(levelBadge("warn")).toBe("WRN");
+    expect(levelBadge("info")).toBe("INF");
+    expect(levelBadge("debug")).toBe("DBG");
+    expect(levelBadge("other")).toBe("");
+  });
+
+  test("a structured line splits into logger, message, and folded context", async () => {
+    const entries = await fixtureEntries("livekit.log");
+    const parts = contentParts(entries.at(-1));
+    expect(parts.logger).toBe("livekit.agents");
+    expect(parts.text).toBe("process exiting");
+    expect(parts.ctx).toStartWith('{"reason"');
+  });
+
+  test("a plain line keeps its body and a marker keeps its own text", async () => {
+    const entries = await fixtureEntries("nextjs.log");
+    expect(contentParts(entries[5]).text).toBe(" GET /api/x 500 in 34ms");
+    expect(contentParts(entries[0]).logger).toBeUndefined();
+    expect(contentParts(undefined).text).toBe("");
+  });
+});
+
+describe("prettyCtx and ctxTokens", () => {
+  test("prints nested objects at two spaces and hands back anything that is not JSON", () => {
+    expect(prettyCtx('{"a":{"b":[1,2]}}')).toBe('{\n  "a": {\n    "b": [\n      1,\n      2\n    ]\n  }\n}');
+    expect(prettyCtx("{not json")).toBe("{not json");
+    expect(prettyCtx('"a string"')).toBe('"a string"');
+    expect(prettyCtx(undefined)).toBe("");
+  });
+
+  test("tokens carry the key, string, and number runs and nothing else", () => {
+    const pretty = prettyCtx('{"pid":72519,"reason":"job completed"}');
+    const tokens = ctxTokens(pretty);
+    expect(tokens.filter((t) => t.kind === "key").map((t) => t.text)).toEqual(['"pid"', '"reason"']);
+    expect(tokens.filter((t) => t.kind === "num").map((t) => t.text)).toEqual(["72519"]);
+    expect(tokens.filter((t) => t.kind === "str").map((t) => t.text)).toEqual(['"job completed"']);
+    expect(tokens.map((t) => t.text).join("")).toBe(pretty);
+  });
+});
+
+describe("httpSpans, idSpans, mergeSpans", () => {
+  test("a request line marks its method, path, status, and duration", async () => {
+    const entries = await fixtureEntries("nextjs.log");
+    const e = entries[5];
+    const text = contentParts(e).text;
+    const spans = httpSpans(text, e.http);
+    expect(spans.map((s) => text.slice(s.start, s.end))).toEqual(["GET", "/api/x", "500", "34"]);
+    expect(spans[2].cls).toBe("s5");
+    expect(spans[3].cls).toBe("hd");
+    expect(statusClass(201)).toBe("s2");
+    expect(statusClass(302)).toBe("s3");
+    expect(statusClass(404)).toBe("s4");
+  });
+
+  test("a slow request marks its duration as a warning", async () => {
+    const entries = await fixtureEntries("nextjs.log");
+    const e = entries.at(-1);
+    const spans = httpSpans(contentParts(e).text, e.http);
+    expect(spans.at(-1).cls).toBe("hs");
+    expect(httpSpans("no request here", undefined)).toEqual([]);
+  });
+
+  test("an id wins the overlap and the spans come back in text order", () => {
+    const text = "GET /req-9f2c 200 in 5ms";
+    const spans = mergeSpans([
+      ...idSpans(text, ["req-9f2c"]),
+      ...httpSpans(text, { method: "GET", path: "/req-9f2c", status: 200, ms: 5 }),
+    ]);
+    expect(spans.map((s) => s.kind)).toEqual(["http", "id", "http", "http"]);
+    expect(spans.map((s) => s.start)).toEqual([...spans.map((s) => s.start)].sort((a, b) => a - b));
+    expect(mergeSpans([]).length).toBe(0);
   });
 });

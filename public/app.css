@@ -585,6 +585,7 @@ input, textarea { font: inherit; color: var(--fg); }
 }
 .log-line {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -596,11 +597,59 @@ input, textarea { font: inherit; color: var(--fg); }
 .log-line:hover { background: var(--menu); }
 .log-line .ln { flex: none; color: var(--ln); user-select: none; width: 30px; text-align: right; }
 .log-line .t { flex: none; color: var(--ts); user-select: none; }
+.log-line .lvl {
+  flex: none;
+  width: 3ch;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--dim);
+  user-select: none;
+}
+.log-line .c { flex: 1 1 auto; min-width: 0; }
+.log-line.err .lvl { color: var(--err); }
+.log-line.warn .lvl { color: var(--warn); }
+.log-line.ok .lvl { color: var(--ok); }
 .log-line.err { color: var(--err-fg); background: rgba(229, 83, 75, .1); }
-.log-line.warn { color: var(--warn); }
 .log-line.mark { color: var(--dim); }
-.log-line.ok { color: var(--ok); }
 .log-line.cur { box-shadow: inset 2px 0 0 var(--err); }
+.log-line .lg {
+  color: var(--dim);
+  font: inherit;
+  margin-right: 10px;
+  cursor: pointer;
+}
+.log-line .lg:hover { color: var(--fg); }
+.log-line .hm { color: var(--sec); }
+.log-line .hp { color: var(--fg); }
+.log-line .s2 { color: var(--ok); }
+.log-line .s3 { color: var(--dim); }
+.log-line .s4 { color: var(--warn); }
+.log-line .s5 { color: var(--err-fg); }
+.log-line .hd { color: var(--dim); }
+.log-line .hs { color: var(--warn); }
+.ctx-btn {
+  margin-left: 8px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font: inherit;
+  color: var(--dim);
+  background: var(--hover);
+  cursor: pointer;
+}
+.ctx-btn:hover, .ctx-btn.on { color: var(--fg); }
+pre.ctx {
+  flex-basis: 100%;
+  margin: 2px 0 6px 44px;
+  padding: 6px 10px;
+  border-left: 1px solid var(--border);
+  font: 12px/1.6 var(--mono);
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+pre.ctx .j-key { color: var(--dim); }
+pre.ctx .j-str { color: var(--fg); }
+pre.ctx .j-num { color: var(--ok); }
 .log-id {
   display: inline;
   margin: 0 -2px;
