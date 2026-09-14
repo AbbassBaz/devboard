@@ -1,7 +1,8 @@
 import {
   compileFilter, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans,
-  findLinks, idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, markerLabel, matchesEntry,
-  matchIndexes, matchSpans, mergeSpans, prettyCtx, runBoundaries, unreadLabel, visibleEntries, visibleGroups,
+  findLinks, idSpans, isHidden, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, markerLabel,
+  matchesEntry, matchIndexes, matchSpans, mergeSpans, prettyCtx, runBoundaries, unreadLabel, visibleEntries,
+  visibleGroups,
 } from "./log-view.js";
 
 const $ = (s) => document.querySelector(s);
@@ -29,6 +30,9 @@ let hideNonMatching = true;
 /** Where the view was when you left each service, and where to draw `new since` on return. */
 const lastSeen = {};
 let unreadKey = null;
+/** Hide rules per service, saved per browser, and whether the chip is applying them. */
+const hideRules = {};
+let hideOn = true;
 /** The Levels dropdown. All five until you uncheck one; persisted per browser. */
 const levels = new Set(LEVELS);
 let runOnly = false;
@@ -466,9 +470,9 @@ function logMenuItems(s) {
     { label: "Expand all JSON", key: ctxAll ? "✓" : "", act: "expand-json" },
     { label: "Copy visible lines", key: "", act: "copy-visible" },
     { label: "Copy last error", key: "", act: "copy-last-error" },
-    { label: "Clear log file…", key: "", act: "clear-log" },
-    { sep: true },
   ];
+  if ((hideRules[s.id] ?? []).length) items.push({ label: "Forget hide rules", key: "", act: "forget-hide" });
+  items.push({ label: "Clear log file…", key: "", act: "clear-log" }, { sep: true });
   if (s.status === "running" && !s.pinned) items.push({ label: "Pin", key: "", act: "pin" });
   if (s.pinned) items.push({ label: "Edit…", key: "", act: "edit" });
   items.push({ label: "Env…", key: "", act: "env" });
@@ -563,9 +567,32 @@ function saveLogView() {
 }
 loadLogView();
 
+const LOG_HIDE_KEY = "devboard.logHide";
+function loadHideRules() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOG_HIDE_KEY) || "{}");
+    for (const [id, rules] of Object.entries(saved)) {
+      if (Array.isArray(rules) && rules.length) hideRules[id] = rules.filter((r) => typeof r === "string" && r.trim());
+    }
+  } catch {}
+}
+function saveHideRules() {
+  try { localStorage.setItem(LOG_HIDE_KEY, JSON.stringify(hideRules)); } catch {}
+}
+loadHideRules();
+
 /** What `visibleEntries`, `visibleGroups`, `matchIndexes`, and `errorIndexes` read. */
 function viewState() {
-  return { filter: logQuery, filterHides: hideNonMatching, levels, runOnly, viewStart: viewStart[sel], base: baseOf(sel) };
+  return {
+    filter: logQuery,
+    filterHides: hideNonMatching,
+    levels,
+    runOnly,
+    hide: hideRules[sel],
+    hideOn,
+    viewStart: viewStart[sel],
+    base: baseOf(sel),
+  };
 }
 function shownEntries(s) {
   return visibleEntries(entriesOf(s?.id), viewState());
@@ -615,7 +642,8 @@ function paintSearchTools(s) {
   wrap.innerHTML = `<span class="n">${esc(label)}</span>
     <button type="button" data-act="match-prev" title="Previous match (⇧Enter · N)">▲</button>
     <button type="button" data-act="match-next" title="Next match (Enter · n)">▼</button>
-    <button type="button" data-act="match-mode" class="${hideNonMatching ? "" : "on"}" title="${hideNonMatching ? "Showing only matching lines" : "Showing every line, matches highlighted"}">⊘</button>`;
+    <button type="button" data-act="match-mode" class="${hideNonMatching ? "" : "on"}" title="${hideNonMatching ? "Showing only matching lines" : "Showing every line, matches highlighted"}">⊘</button>
+    <button type="button" class="hide-these" data-act="hide-these" title="Stop showing lines like these in this log">Hide these</button>`;
   input.style.paddingRight = `${wrap.offsetWidth + 8}px`;
 }
 
@@ -653,7 +681,7 @@ function paintLogTools(s) {
   const tracing = !!trace;
   const count = $("#logCount");
   // Trace is its own view: the row keeps only the way out of it.
-  for (const el of ["#searchWrap", "#errChip", "#runBtn", "#freezeBtn", "#clearBtn"]) {
+  for (const el of ["#searchWrap", "#errChip", "#runBtn", "#freezeBtn", "#clearBtn", "#hideChip"]) {
     $(el).hidden = tracing || !s;
   }
   $("#levelsBtn").parentElement.hidden = tracing || !s;
@@ -678,6 +706,15 @@ function paintLogTools(s) {
       ? `${errIdx.length} ${errIdx.length === 1 ? "error" : "errors"} ↓`
       : `error ${errIdx.indexOf(errCursor) + 1}/${errIdx.length} ↓`;
     chip.innerHTML = `<span class="d"></span>${esc(label)}`;
+  }
+
+  const rules = hideRules[s.id] ?? [];
+  const hideChip = $("#hideChip");
+  hideChip.hidden = rules.length === 0;
+  if (rules.length) {
+    hideChip.textContent = `${rules.length} hidden`;
+    hideChip.classList.toggle("on", !hideOn);
+    hideChip.title = `${rules.length} hide rule${rules.length === 1 ? "" : "s"}: ${rules.join(" · ")}\n${hideOn ? "Click to show what they catch, dimmed" : "Click to hide them again"}`;
   }
 
   $("#runBtn").classList.toggle("on", runOnly);
@@ -810,9 +847,11 @@ function logLineHtml(s, e, showTime, opts = {}) {
   const tid = entryTid(e);
   const key = baseOf(s.id) + e.i;
   const hit = matchCursor === key ? " hit" : "";
+  // With the chip off the hidden lines stay, dimmed, so a rule can be checked against them.
+  const muted = !hideOn && isHidden(e, hideRules[s.id]) ? " muted" : "";
   const cls = opts.cont
-    ? `log-line cont${hit}`
-    : `log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}${hit}`;
+    ? `log-line cont${hit}${muted}`
+    : `log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}${hit}${muted}`;
   return `<div class="${cls}" data-i="${key}" title="Click to copy">
       <span class="ln">${key + 1}</span>
       ${opts.repeat > 1 ? `<span class="rep" title="the same line ${opts.repeat} times">×${opts.repeat}</span>` : ""}
@@ -1132,6 +1171,19 @@ function goLive() {
   if (s) appendToLog(s, [], baseOf(s.id));
   $("#logBody").scrollTop = $("#logBody").scrollHeight;
   paintLog();
+}
+
+/** Turn what is in the search field into a hide rule for this service and clear the field. */
+function addHideRule() {
+  const s = selected();
+  const text = logQuery.trim();
+  if (!s?.id || !text) return;
+  const rules = hideRules[s.id] ?? (hideRules[s.id] = []);
+  if (!rules.includes(text)) rules.push(text);
+  saveHideRules();
+  hideOn = true;
+  searchFor("");
+  toast(`hiding · ${text}`);
 }
 
 /** Clear the view, not the file: hide everything before now. `show all` puts it back. */
@@ -1620,6 +1672,16 @@ document.addEventListener("click", async (ev) => {
   if (act === "match-next") { stepMatch(1); return; }
   if (act === "match-prev") { stepMatch(-1); return; }
   if (act === "match-mode") { hideNonMatching = !hideNonMatching; markLogDirty(); paintLog(); return; }
+  if (act === "hide-these") { addHideRule(); return; }
+  if (act === "forget-hide") {
+    closeMenu();
+    if (s?.id) delete hideRules[s.id];
+    saveHideRules();
+    hideOn = true;
+    markLogDirty();
+    paintLog();
+    return;
+  }
   if (act === "select-alert" && id) { closeSheet(); select(id); return; }
 
   if (btn.tagName === "BUTTON") btn.disabled = true;
@@ -1835,6 +1897,7 @@ $("#levelsBtn").onclick = (ev) => setMenu("levels", ev);
 $("#runBtn").onclick = () => { runOnly = !runOnly; saveLogView(); markLogDirty(); paintLog(); };
 $("#freezeBtn").onclick = () => { if (frozen) goLive(); else { setFrozen(true); paintLog(); } };
 $("#clearBtn").onclick = () => clearView(false);
+$("#hideChip").onclick = () => { hideOn = !hideOn; markLogDirty(); paintLog(); };
 $("#logBody").addEventListener("scroll", () => {
   const b = $("#logBody");
   const atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 8;

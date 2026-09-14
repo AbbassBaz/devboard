@@ -585,6 +585,9 @@ input, textarea { font: inherit; color: var(--fg); }
 }
 #errChip .d { width: 6px; height: 6px; border-radius: 50%; background: var(--err); }
 #errChip:hover { border-color: var(--err); color: var(--err); }
+#hideChip { color: var(--dim); }
+.search-tools .hide-these { color: var(--sec); }
+.search-tools .hide-these:hover { color: var(--fg); }
 #closeBtn { color: var(--accent); }
 #closeBtn:hover { border-color: var(--accent); color: var(--accent); }
 .menu.levels { min-width: 220px; }
@@ -701,6 +704,7 @@ pre.ctx {
 .log-div.new { color: var(--accent); }
 .log-div.new::before,
 .log-div.new::after { background: rgba(138, 180, 248, .35); }
+.log-line.muted { opacity: .45; }
 .log-line.cont { color: var(--dim); }
 .log-line.cont .c { padding-left: 14px; }
 .fold {

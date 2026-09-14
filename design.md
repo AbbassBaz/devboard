@@ -109,14 +109,14 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 
 ### Log pane — `#16181c`
 
-**A** (min 44, `8px 16px`, wrap, border `#2a2e35`): dot · name 600 14 · `localhost:PORT ↗` · state dim (`unhealthy` in the error token when the probe fails). Primary: **Start** green fill when stopped; **Restart** outlined when running; `starting…` disabled when busy. Then `···` (200px menu): Open in browser (`o`) · Open in editor · Copy run command (`c`) · ─ · Wrap lines ✓ · Show timestamps ✓ · Expand all JSON ✓ · Copy visible lines · Copy last error · Clear log file… · ─ · Pin (unpinned) · Edit… (pinned) · Env… · Add to / Remove from project · Hide · Remove (red, pinned).
+**A** (min 44, `8px 16px`, wrap, border `#2a2e35`): dot · name 600 14 · `localhost:PORT ↗` · state dim (`unhealthy` in the error token when the probe fails). Primary: **Start** green fill when stopped; **Restart** outlined when running; `starting…` disabled when busy. Then `···` (200px menu): Open in browser (`o`) · Open in editor · Copy run command (`c`) · ─ · Wrap lines ✓ · Show timestamps ✓ · Expand all JSON ✓ · Copy visible lines · Copy last error · Forget hide rules (only with rules) · Clear log file… · ─ · Pin (unpinned) · Edit… (pinned) · Env… · Add to / Remove from project · Hide · Remove (red, pinned).
 
 **B** (30px, mono 11 dim, border `#22262c`): click-to-copy `cwd` and `$ command` (glyph `#4a5160`, hover `#d7dae0`); `pid · cpu · MB · up` when running.
 
 **Toolbar** (min 38, `6px 16px`, wrap, border `#22262c`). One visible row, in this order, present whenever a service is selected:
 
 ```
-[ Search log                         3/41 ▲ ▼ ⊘ ] [ Levels ▾ ] [ 20 errors ↓ ] [ This run ] [ ⏸ Freeze ] [ Clear ]          k/N lines
+[ Search log            3/41 ▲ ▼ ⊘ Hide these ] [ Levels ▾ ] [ 20 errors ↓ ] [ This run ] [ ⏸ Freeze ] [ Clear ] [ 2 hidden ]   k/N lines
 ```
 
 - Controls are 26px, outlined, mono 12. An active toggle takes the accent border and the accent wash. A conditional chip takes the colour of what it counts. No new palette.
@@ -127,6 +127,7 @@ Selection highlight: `#3a4a66`. Scrollbar thumb: `#3a3e46`.
 - **This run** — toggle, hides everything before the last `start` marker. Persists per browser.
 - **⏸ Freeze / ▶ Live** — one button, two states. Live: the view appends and follows the tail. Frozen: nothing on screen moves while the buffer keeps filling, and the label reads `▶ Live · +42`. Scrolling away from the tail enters the same state, so there is exactly one control for "take me back to the tail". Clicking it while frozen appends what was held, jumps to the tail, and goes live.
 - **Clear** — clears the view, not the file: entries before now are hidden and the count reads `k/N lines · cleared · show all`. `⌘K` is the accelerator. Truncating the file is `Clear log file…` in the `···` menu, with its confirm.
+- **N hidden** — conditional, dim, after Clear, shown when this service has hide rules. Rules come from the search field: while it has text a `Hide these` button sits at its right end after the match controls, and pressing it saves that text as a rule for this service in `localStorage["devboard.logHide"][id]` and clears the field. The chip is a toggle: on applies the rules, off leaves the lines in place at 45% so a rule can be checked. `Forget hide rules` in the `···` menu drops them all. There is no per-line hide and no right-click: to hide lines like one on screen, click it to copy, paste the distinctive part into search, and press `Hide these`.
 - Right: `N lines` or `k/N lines` (mono 11 dim), `title` = log path.
 - Nothing else opens a menu from this row, and no action lives only behind a shortcut. While Trace is open the row keeps only **Close** and `N hits`; the search field and Levels do not filter trace hits, so they hide with the rest until F-44 makes Search own that view.
 
@@ -171,7 +172,7 @@ Graphite surfaces (`#1c1f24`, border `#2a2e35`, radius 7, same shadow). Used for
 
 ## State
 
-`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logQuery`, `levels` (`Set<LogLevel>`), `runOnly`, `frozen`, `held`, `viewStart{id: key}`, `wrap`, `showTs`, `ctxOpen` / `ctxAll`, `tailOpen`, `errCursor`, `jumpLine`, `trace` (`null|{token, groups}`), `menu` (`null|"top"|"log"|"levels"`), `addOpen`, `toast`, `logs{id: {entries, next, base}}`. `levels`, `runOnly`, `wrap`, and `showTs` persist in `localStorage["devboard.logView"]`.
+`servers[]`, `busy{id: "starting"|"stopping"}`, `sel`, `query`, `logQuery`, `levels` (`Set<LogLevel>`), `runOnly`, `frozen`, `held`, `viewStart{id: key}`, `hideRules{id: string[]}`, `hideOn`, `wrap`, `showTs`, `ctxOpen` / `ctxAll`, `tailOpen`, `errCursor`, `jumpLine`, `trace` (`null|{token, groups}`), `menu` (`null|"top"|"log"|"levels"`), `addOpen`, `toast`, `logs{id: {entries, next, base}}`. `levels`, `runOnly`, `wrap`, and `showTs` persist in `localStorage["devboard.logView"]`; the hide rules in `localStorage["devboard.logHide"]`.
 
 ## Endpoints
 

@@ -51,9 +51,11 @@ export function inLevels(entry, levels) {
   return has(entry?.level ?? "other");
 }
 
-/** The scope filters: level, and nothing else that reads one line at a time. */
+/** The scope filters that read one line at a time: its level and the service's hide rules. */
 function inScope(entry, state) {
-  return !!entry && inLevels(entry, state.levels);
+  if (!entry || !inLevels(entry, state.levels)) return false;
+  // `hideOn: false` is the chip toggled off: the lines stay, dimmed, so a rule can be checked.
+  return state.hideOn === false || !isHidden(entry, state.hide);
 }
 
 const TOKEN = /-?"[^"]*"|-?\/(?:[^/\\]|\\.)*\/[a-z]*(?=\s|$)|\S+/g;
@@ -110,12 +112,26 @@ export function matches(entry, filter) {
   return true;
 }
 
-let filterCache = { text: null, filter: null };
-/** `parseFilter` memoised on the field's text: every entry in the buffer asks for the same one. */
+const filterCache = new Map();
+/** `parseFilter` memoised: every entry in the buffer asks for the same search and hide rules. */
 export function compileFilter(text) {
   const key = String(text ?? "");
-  if (filterCache.text !== key) filterCache = { text: key, filter: parseFilter(key) };
-  return filterCache.filter;
+  let filter = filterCache.get(key);
+  if (!filter) {
+    filter = parseFilter(key);
+    if (filterCache.size > 32) filterCache.clear();
+    filterCache.set(key, filter);
+  }
+  return filter;
+}
+
+/** Does any of this service's hide rules catch the line? Same syntax as the search field. */
+export function isHidden(entry, hide) {
+  for (const rule of hide ?? []) {
+    const filter = compileFilter(rule);
+    if (!filter.empty && matches(entry, filter)) return true;
+  }
+  return false;
 }
 
 /** The text filter. `filterHides: false` is the `⊘` mode: keep every line, highlight the hits. */

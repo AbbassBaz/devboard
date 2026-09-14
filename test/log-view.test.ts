@@ -3,7 +3,7 @@ import { parseLine } from "../lib/logs";
 // The page's pure half. It must import with no DOM, which is the whole point of the file.
 import {
   collapseRepeats, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, findLinks, foldEntries, formatLogTime,
-  httpSpans, idSpans, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matches, matchesEntry,
+  httpSpans, idSpans, isHidden, levelBadge, levelCounts, levelsLabel, LEVELS, lineKind, matches, matchesEntry,
   markerLabel, matchIndexes, matchSpans, mergeSpans, parseFilter, prettyCtx, relativeAge, runBoundaries,
   scopeStart, statusClass, unreadLabel, visibleEntries, visibleGroups,
 } from "../public/log-view.js";
@@ -96,6 +96,31 @@ describe("visibleEntries", () => {
 
     const both = visibleEntries(entries, { viewStart: 12, levels: ["info"], filter: "process" });
     expect(both.map((e) => e.msg)).toEqual(["process exiting"]);
+  });
+
+  test("a hide rule drops the lines it catches and the chip off shows them again", async () => {
+    const entries = await fixtureEntries("nextjs.log");
+    const all = entries.length;
+    const kept = visibleEntries(entries, { hide: ["/api"] });
+    expect(kept).toHaveLength(all - 3);
+    expect(kept.some((e) => e.text.includes("/api"))).toBe(false);
+    // Same syntax as the search field, so a regex rule works too.
+    expect(visibleEntries(entries, { hide: ["/ 50\\d/"] })).toHaveLength(all - 1);
+    expect(visibleEntries(entries, { hide: ["/api", "Ready"] })).toHaveLength(all - 4);
+    // Toggled off, nothing is dropped; the page dims them instead.
+    expect(visibleEntries(entries, { hide: ["/api"], hideOn: false })).toHaveLength(all);
+    expect(isHidden(entries[5], ["/api"])).toBe(true);
+    expect(isHidden(entries[5], ["nothing"])).toBe(false);
+    expect(isHidden(entries[5], [])).toBe(false);
+    expect(isHidden(entries[5], ["  "])).toBe(false);
+  });
+
+  test("a hide rule on a static path is a term, not a broken regex", async () => {
+    const entries = [
+      parseLine(" GET /_next/static/chunks/main.js 200 in 3ms", 0),
+      parseLine(" GET /api/orders 200 in 9ms", 1),
+    ];
+    expect(visibleEntries(entries, { hide: ["/_next/static"] }).map((e) => e.i)).toEqual([1]);
   });
 
   test("the level set the dropdown shows is named by what is in it", () => {
