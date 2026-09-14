@@ -1,6 +1,6 @@
 import {
   contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans, idSpans,
-  levelBadge, lineKind, matchesEntry, mergeSpans, prettyCtx, visibleEntries,
+  levelBadge, lineKind, matchesEntry, mergeSpans, prettyCtx, visibleEntries, visibleGroups,
 } from "./log-view.js";
 
 const $ = (s) => document.querySelector(s);
@@ -41,6 +41,11 @@ let jumpLine = null;
 const ctxOpen = new Set();
 /** ⌥click on any chevron flips the default for every line, so one click opens the pane. */
 let ctxAll = false;
+/** Absolute line keys of the groups whose folded tail is open. */
+const tailOpen = new Set();
+/** Groups the pane opened by itself (the newest crash), so closing one keeps it closed. */
+const autoOpened = new Set();
+let autoOpenKey = null;
 
 try { sel = localStorage.getItem("devboard.sel"); } catch {}
 try {
@@ -217,7 +222,7 @@ async function jumpToHit(id, i) {
   await fetchLog(id, { full: true, lines: 5000 });
   markLogDirty();
   paintLog();
-  document.getElementById(`log-${id}-${i}`)?.scrollIntoView({ block: "center" });
+  revealKey(i);
 }
 
 function errTotal() {
@@ -500,6 +505,10 @@ function shownEntries(s) {
   return visibleEntries(entriesOf(s?.id), viewState());
 }
 
+function shownGroups(s) {
+  return visibleGroups(entriesOf(s?.id), viewState());
+}
+
 /** Put text in the log filter and apply it. Clicking a logger name is how you filter to one. */
 function searchFor(text) {
   const field = $("#logFilter");
@@ -640,18 +649,113 @@ function contentHtml(e, key) {
   return `${lg}${richText(text, e)}${chevron}`;
 }
 
-function logLineHtml(s, e, showTime) {
+function logLineHtml(s, e, showTime, opts = {}) {
   const t = formatLogTime(e.time);
   const tid = entryTid(e);
   const key = baseOf(s.id) + e.i;
-  return `<div class="log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}" data-i="${key}" id="log-${esc(s.id)}-${key}" title="Click to copy line">
+  const cls = opts.cont
+    ? "log-line cont"
+    : `log-line ${lineKind(e)}${errCursor === key || jumpLine === key ? " cur" : ""}`;
+  return `<div class="${cls}" data-i="${key}" title="Click to copy">
       <span class="ln">${key + 1}</span>
+      ${opts.repeat > 1 ? `<span class="rep" title="the same line ${opts.repeat} times">×${opts.repeat}</span>` : ""}
       ${showTime ? `<span class="t">${esc(t)}</span>` : ""}
-      <span class="lvl">${levelBadge(e.level)}</span>
+      <span class="lvl">${opts.cont ? "" : levelBadge(e.level)}</span>
       ${tid ? `<span class="log-tid" title="request id">${esc(tid)}</span>` : ""}
-      <span class="c">${contentHtml(e, key)}</span>
+      <span class="c">${contentHtml(e, key)}${opts.fold ?? ""}</span>
       ${ctxBlock(e, key)}
     </div>`;
+}
+
+/** Is this group's folded tail open? The newest crash opens itself once; the Set holds the rest. */
+function tailIsOpen(key) {
+  return tailOpen.has(key);
+}
+
+/** One group: the head line, its `▶ +N lines` chevron, and the tail when it is open. */
+function groupHtml(s, g, showTime) {
+  const key = baseOf(s.id) + g.head.i;
+  const open = tailIsOpen(key);
+  const fold = g.tail.length
+    ? `<button type="button" class="fold" data-act="fold" data-key="${key}">${open ? "▼" : "▶"} +${g.tail.length} lines</button>`
+    : "";
+  const head = logLineHtml(s, g.head, showTime, { repeat: g.repeat, fold });
+  const tail = g.tail.length && open ? tailHtml(s, g, showTime) : "";
+  return `<div class="log-group" data-i="${key}" id="log-${esc(s.id)}-${key}">${head}${tail}</div>`;
+}
+
+function tailHtml(s, g, showTime) {
+  return `<div class="log-tail">${g.tail.map((e) => logLineHtml(s, e, showTime, { cont: true })).join("")}</div>`;
+}
+
+/**
+ * The newest error group with frames under it opens itself; when a newer one arrives the
+ * older one closes again, so exactly one crash is open unless you opened others by hand.
+ */
+function autoOpenNewestCrash(groups, base) {
+  let key = null;
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const g = groups[i];
+    if (g.head.level === "error" && g.tail.length) { key = base + g.head.i; break; }
+  }
+  if (key === autoOpenKey) return;
+  if (autoOpenKey != null && autoOpened.has(autoOpenKey)) {
+    autoOpened.delete(autoOpenKey);
+    setFold(autoOpenKey, false);
+  }
+  autoOpenKey = key;
+  if (key != null && !autoOpened.has(key)) {
+    autoOpened.add(key);
+    setFold(key, true);
+  }
+}
+
+/** The group a line belongs to: walk back over the frames to the line that carries them. */
+function groupKeyFor(key) {
+  const base = baseOf(sel);
+  let k = key;
+  while (k > base && entryByKey(sel, k)?.cont) k--;
+  return k;
+}
+
+function groupOf(key) {
+  const entries = entriesOf(sel);
+  const at = key - baseOf(sel);
+  const head = entries[at];
+  if (!head) return null;
+  const tail = [];
+  for (let k = at + 1; k < entries.length && entries[k].cont; k++) tail.push(entries[k]);
+  return { head, tail };
+}
+
+/** Open or close one tail in place, so the reading position survives the click. */
+function setFold(key, open) {
+  if (open) tailOpen.add(key);
+  else tailOpen.delete(key);
+  const s = selected();
+  const node = s ? document.getElementById(`log-${s.id}-${key}`) : null;
+  if (!node) return; // not rendered yet; the next render reads the Set
+  const existing = node.querySelector(".log-tail");
+  const g = groupOf(key);
+  if (open && !existing && g) node.insertAdjacentHTML("beforeend", tailHtml(s, g, showTimeFor(s.id)));
+  else if (!open && existing) existing.remove();
+  const btn = node.querySelector("button.fold");
+  if (btn && g) btn.textContent = `${open ? "▼" : "▶"} +${g.tail.length} lines`;
+}
+
+function toggleFold(key) {
+  setFold(key, !tailIsOpen(key));
+}
+
+/** Bring a line into view, opening the group that holds it when it is folded away. */
+function revealKey(key) {
+  const s = selected();
+  if (!s) return;
+  const head = groupKeyFor(key);
+  if (head !== key && !tailIsOpen(head)) toggleFold(head);
+  const c = $("#logBody");
+  const el = document.getElementById(`log-${s.id}-${head}`);
+  if (c && el) c.scrollTop = el.offsetTop - c.offsetTop - Math.min(80, c.clientHeight / 3);
 }
 
 /** Full repaint. Runs only when view state changes: selection, filter, level, follow, status. */
@@ -693,12 +797,41 @@ function rebuildBody(s) {
   }
 
   const showTime = showTimeFor(s.id);
-  body.innerHTML = shown.map((e) => logLineHtml(s, e, showTime)).join("") + caretHtml(s);
-  logRendered = { id: s.id, mode: "lines", showTime };
+  const base = baseOf(s.id);
+  const groups = shownGroups(s);
+  autoOpenNewestCrash(groups, base);
+  body.innerHTML = groups.map((g) => groupHtml(s, g, showTime)).join("") + caretHtml(s);
+  logRendered = { id: s.id, mode: "lines", showTime, lastKey: base + groups[groups.length - 1].head.i };
   if (follow) body.scrollTop = body.scrollHeight;
 }
 
-/** Append path: new entries become nodes at the tail, no rebuild. */
+/**
+ * Append path: re-render the last group (a frame or a repeat may have joined it) and add
+ * the groups after it. No rebuild, so 10 000 lines are not re-created every second.
+ */
+function syncGroups(s, body, showTime, added) {
+  const groups = shownGroups(s);
+  if (!groups.length) return false;
+  const base = baseOf(s.id);
+  const lastKey = logRendered.lastKey;
+  let from = 0;
+  if (lastKey != null) {
+    const node = document.getElementById(`log-${s.id}-${lastKey}`);
+    if (!node) return false;
+    from = groups.findIndex((g) => base + g.end >= lastKey);
+    if (from < 0) return false;
+    node.remove();
+  }
+  autoOpenNewestCrash(groups, base);
+  const html = groups.slice(from).map((g) => groupHtml(s, g, showTime)).join("");
+  const caret = body.querySelector(".caret");
+  if (caret) caret.insertAdjacentHTML("beforebegin", html);
+  else body.insertAdjacentHTML("beforeend", html);
+  logRendered.lastKey = base + groups[groups.length - 1].head.i;
+  if (!follow) newSinceFollow += added.filter((e) => matchesEntry(e, viewState())).length;
+  return true;
+}
+
 function appendToLog(s, added, base) {
   const body = $("#logBody");
   const showTime = showTimeFor(s.id);
@@ -707,13 +840,10 @@ function appendToLog(s, added, base) {
     paintLogBody(s);
     return;
   }
-  const visible = added.filter((e) => matchesEntry(e, viewState()));
-  if (visible.length) {
-    const html = visible.map((e) => logLineHtml(s, e, showTime)).join("");
-    const caret = body.querySelector(".caret");
-    if (caret) caret.insertAdjacentHTML("beforebegin", html);
-    else body.insertAdjacentHTML("beforeend", html);
-    if (!follow) newSinceFollow += visible.length;
+  if (!syncGroups(s, body, showTime, added)) {
+    markLogDirty();
+    paintLogBody(s);
+    return;
   }
   if (base) dropLeadingLines(body, base);
   const caret = body.querySelector(".caret");
@@ -758,6 +888,12 @@ function select(id) {
   saveSel(id);
   errCursor = null;
   jumpLine = null;
+  // Line keys belong to one log, so the folds and open contexts of the old one go.
+  ctxOpen.clear();
+  ctxAll = false;
+  tailOpen.clear();
+  autoOpened.clear();
+  autoOpenKey = null;
   if (trace) { trace = null; }
   markLogDirty();
   paintList();
@@ -777,9 +913,7 @@ function nextErr() {
   setFollow(false);
   markLogDirty();
   paintLog();
-  const c = $("#logBody");
-  const el = document.getElementById(`log-${s.id}-${next}`);
-  if (c && el) c.scrollTop = el.offsetTop - c.offsetTop - Math.min(80, c.clientHeight / 3);
+  revealKey(next);
 }
 
 function moveSel(dir) {
@@ -1079,12 +1213,12 @@ function trimBuffer(buf) {
   return over;
 }
 
-/** Drop the rendered lines that fell out of the buffer, keeping the reading position. */
+/** Drop the rendered groups that fell out of the buffer, keeping the reading position. */
 function dropLeadingLines(body, base) {
   const top = body.scrollTop;
   const height = body.scrollHeight;
   let node = body.firstElementChild;
-  while (node && node.classList.contains("log-line") && Number(node.dataset.i) < base) {
+  while (node && node.classList.contains("log-group") && Number(node.dataset.i) < base) {
     const next = node.nextElementSibling;
     node.remove();
     node = next;
@@ -1153,6 +1287,9 @@ document.addEventListener("click", async (ev) => {
   const idBtn = ev.target.closest(".log-id");
   if (idBtn?.dataset.token) { openTrace(idBtn.dataset.token); return; }
 
+  const foldBtn = ev.target.closest("button[data-act=fold]");
+  if (foldBtn) { toggleFold(Number(foldBtn.dataset.key)); return; }
+
   const ctxBtn = ev.target.closest("button[data-act=ctx]");
   if (ctxBtn) { toggleCtx(Number(ctxBtn.dataset.key), ev.altKey); return; }
 
@@ -1162,8 +1299,13 @@ document.addEventListener("click", async (ev) => {
   const line = ev.target.closest(".log-line");
   if (line && !ev.target.closest("button") && line.dataset.act !== "trace-jump") {
     const s = selected();
-    const rec = entriesOf(s?.id)[Number(line.dataset.i) - baseOf(s?.id)];
-    if (rec) copy(entryBody(rec) || rec.text);
+    const key = Number(line.dataset.i);
+    const rec = entryByKey(s?.id, key);
+    if (!rec) return;
+    // A head copies the whole dump; a frame copies the frame.
+    const head = line.closest(".log-group");
+    const g = head && Number(head.dataset.i) === key ? groupOf(key) : null;
+    copy(g?.tail.length ? [g.head, ...g.tail].map((x) => x.text).join("\n") : entryBody(rec) || rec.text);
     return;
   }
 

@@ -647,6 +647,31 @@ pre.ctx {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.log-line.cont { color: var(--dim); }
+.log-line.cont .c { padding-left: 14px; }
+.fold {
+  margin-left: 10px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font: inherit;
+  color: var(--dim);
+  background: var(--hover);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.fold:hover { color: var(--fg); }
+.rep {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 3px;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font: 600 11px/15px var(--mono);
+  color: var(--ts);
+  background: var(--hover);
+  user-select: none;
+}
 pre.ctx .j-key { color: var(--dim); }
 pre.ctx .j-str { color: var(--fg); }
 pre.ctx .j-num { color: var(--ok); }

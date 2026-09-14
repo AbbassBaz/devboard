@@ -55,6 +55,65 @@ export function visibleEntries(entries, state = {}) {
   return (entries ?? []).filter((e) => matchesEntry(e, state));
 }
 
+/**
+ * Continuation lines folded under the line they belong to. A stack frame, an indented
+ * dump, or a closing brace attaches to the nearest line above that is not one itself;
+ * a `cont` with nothing above it is its own group. `start` and `end` are the positions
+ * the group covers, which is how an append finds the group it has to re-render.
+ */
+export function foldEntries(entries) {
+  const groups = [];
+  for (const e of entries ?? []) {
+    if (!e) continue;
+    const last = groups[groups.length - 1];
+    if (e.cont && last && !last.head.marker) {
+      last.tail.push(e);
+      last.end = e.i;
+      continue;
+    }
+    groups.push({ head: e, tail: [], repeat: 1, start: e.i, end: e.i });
+  }
+  return groups;
+}
+
+/** What makes two lines the same line again: the level, the logger, and the message. */
+export function repeatKey(entry) {
+  if (!entry) return "";
+  if (entry.marker) return `marker|${entry.i}`;
+  // The folded context is left out on purpose: nine `plugin registered` lines differ
+  // only inside their JSON, and the pane shows one of them with `×9`.
+  if (entry.msg != null) return `${entry.level}|${entry.logger ?? ""}|${entry.msg}`;
+  return `${entry.level}|${entryBody(entry)}`;
+}
+
+/** Runs of the same line collapse into the last one, which keeps its time and counts the rest. */
+export function collapseRepeats(groups) {
+  const out = [];
+  for (const g of groups ?? []) {
+    const last = out[out.length - 1];
+    // Only lines with nothing folded under them collapse, so a repeated crash dump
+    // never loses the frames of the copy it replaces.
+    if (last && !last.tail.length && !g.tail.length && !g.head.marker && repeatKey(last.head) === repeatKey(g.head)) {
+      out[out.length - 1] = { head: g.head, tail: [], repeat: last.repeat + 1, start: last.start, end: g.end };
+      continue;
+    }
+    out.push({ ...g });
+  }
+  return out;
+}
+
+/** A group survives when its head does, or when the text filter hits a line folded under it. */
+export function groupMatches(group, state = {}) {
+  if (!group) return false;
+  if (matchesEntry(group.head, state)) return true;
+  return (group.tail ?? []).some((e) => matchesEntry(e, state));
+}
+
+/** The groups the pane renders: folded, collapsed, and filtered, in file order. */
+export function visibleGroups(entries, state = {}) {
+  return collapseRepeats(foldEntries(entries)).filter((g) => groupMatches(g, state));
+}
+
 /** How many lines of each level are in the buffer. Levels with no lines read 0. */
 export function levelCounts(entries) {
   const counts = { error: 0, warn: 0, info: 0, debug: 0, other: 0 };
@@ -65,12 +124,14 @@ export function levelCounts(entries) {
   return counts;
 }
 
-/** Absolute line keys (`base + position`) of the error lines, for the chip and `e`. */
+/**
+ * Absolute line keys (`base + position`) of the error lines, for the chip and `e`.
+ * Heads only: the ten frames of one crash are one stop, not eleven.
+ */
 export function errorIndexes(entries, base = 0) {
   const out = [];
-  const list = entries ?? [];
-  for (let i = 0; i < list.length; i++) {
-    if (list[i]?.level === "error") out.push(base + i);
+  for (const g of collapseRepeats(foldEntries(entries))) {
+    if (g.head.level === "error") out.push(base + g.head.i);
   }
   return out;
 }

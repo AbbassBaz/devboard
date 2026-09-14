@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { parseLine } from "../lib/logs";
 // The page's pure half. It must import with no DOM, which is the whole point of the file.
 import {
-  contentParts, ctxTokens, entryBody, entryTid, errorIndexes, formatLogTime, httpSpans, idSpans, levelBadge,
-  levelCounts, lineKind, matchesEntry, mergeSpans, prettyCtx, statusClass, visibleEntries,
+  collapseRepeats, contentParts, ctxTokens, entryBody, entryTid, errorIndexes, foldEntries, formatLogTime,
+  httpSpans, idSpans, levelBadge, levelCounts, lineKind, matchesEntry, mergeSpans, prettyCtx, statusClass,
+  visibleEntries, visibleGroups,
 } from "../public/log-view.js";
 
 async function fixtureEntries(name: string) {
@@ -92,6 +93,63 @@ describe("errorIndexes", () => {
     expect(plain.every((i) => entries[i].level === "error")).toBe(true);
     expect(errorIndexes(entries, 1000)).toEqual(plain.map((i) => i + 1000));
     expect(errorIndexes([])).toEqual([]);
+  });
+});
+
+describe("foldEntries and collapseRepeats", () => {
+  test("a node crash folds into one group with its nine frames", async () => {
+    const entries = await fixtureEntries("node-crash.log");
+    const groups = foldEntries(entries);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].head.text).toBe("⨯ Failed to start server");
+    expect(groups[0].tail).toHaveLength(0);
+    expect(groups[1].head.text).toStartWith("Error: listen EADDRINUSE");
+    expect(groups[1].tail).toHaveLength(9);
+    expect(groups[1].start).toBe(1);
+    expect(groups[1].end).toBe(10);
+  });
+
+  test("a python traceback folds under the error line that printed it", async () => {
+    const entries = await fixtureEntries("python-traceback.log");
+    const groups = foldEntries(entries);
+    expect(groups[0].head.level).toBe("error");
+    expect(groups[0].tail.length).toBeGreaterThan(4);
+    expect(groups.at(-1).head.text).toBe("asyncio.exceptions.CancelledError");
+  });
+
+  test("a lone continuation with nothing above it is its own group", () => {
+    const groups = foldEntries([parseLine("    at Module._compile (node:internal/modules:1)", 0)]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].head.cont).toBe(true);
+    expect(groups[0].tail).toHaveLength(0);
+    expect(foldEntries(undefined)).toEqual([]);
+  });
+
+  test("nine plugin registered lines collapse into one with a count", async () => {
+    const entries = await fixtureEntries("livekit.log");
+    const groups = collapseRepeats(foldEntries(entries));
+    const repeated = groups.find((g) => g.repeat > 1);
+    expect(repeated.repeat).toBe(9);
+    expect(repeated.head.msg).toBe("plugin registered");
+    // The last one is the one that stays, so its time is the time on screen.
+    expect(repeated.head.ctx).toContain("assemblyai");
+    expect(groups.filter((g) => g.head.msg === "plugin registered")).toHaveLength(1);
+  });
+
+  test("a group survives when the filter hits a line folded under it", async () => {
+    const entries = await fixtureEntries("node-crash.log");
+    const groups = visibleGroups(entries, { filter: "syscall" });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].head.text).toStartWith("Error: listen EADDRINUSE");
+    expect(groups[0].tail).toHaveLength(9);
+  });
+
+  test("errorIndexes counts heads, not the frames under them", async () => {
+    const entries = await fixtureEntries("node-crash.log");
+    expect(errorIndexes(entries)).toEqual([0, 1]);
+    const py = await fixtureEntries("python-traceback.log");
+    // One stop for the whole traceback, and it is the line that printed it.
+    expect(errorIndexes(py, 100)).toEqual([100]);
   });
 });
 
